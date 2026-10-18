@@ -179,3 +179,36 @@ def test_base_project_download_and_submission_guidance(client: TestClient) -> No
         names = handle.namelist()
     assert any(name.endswith("validators.cpp") for name in names)
     assert any(name.endswith("contactbook.h") for name in names)
+
+
+def test_reference_selfcheck_page_and_run(local_client: TestClient) -> None:
+    """基准程序实测页：GET 可打开，POST 用默认参考程序跑通并渲染结论。"""
+    from cpp_assessor.selfcheck import default_reference_source
+
+    if default_reference_source() is None:
+        pytest.skip("缺少随附的参考基准程序")
+
+    page = local_client.get("/reference")
+    assert page.status_code == 200
+    assert "基准程序实测" in page.text
+    assert "不产生" in page.text
+
+    response = local_client.post(
+        "/reference", files={"source": (None, "")}, follow_redirects=False
+    )
+    assert response.status_code == 303, response.text
+    location = response.headers["location"]
+    assert location.startswith("/reference/sc_")
+
+    result = local_client.get(location)
+    assert result.status_code == 200
+    assert "手机号必须为 11 位数字" in result.text
+    assert "不符" in result.text
+
+    report = local_client.get(f"{location}/report.json")
+    assert report.status_code == 200
+    payload = report.json()
+    verdicts = {item["check_id"]: item["verdict"] for item in payload["checks"]}
+    assert verdicts["phone_digits"] == "DEFECT"
+    assert verdicts["name_search_case"] == "DEFECT"
+    assert verdicts["smoke_menu"] == "PASS"

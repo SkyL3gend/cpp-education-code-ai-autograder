@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}实测结果{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/reference">基准程序实测</a> / {{ report.selfcheck_id }}</p>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ report.source_name }}</h2>
+    <a class="button" href="/reference/{{ report.selfcheck_id }}/report.json">下载 JSON 报告</a>
+  </div>
+  <table class="kv">
+    <tr><th>实测编号</th><td class="mono">{{ report.selfcheck_id }}</td></tr>
+    <tr><th>源码哈希</th><td class="mono small">{{ report.source_sha256 }}</td></tr>
+    <tr><th>编译</th><td>
+      <span class="badge {{ 'pass' if report.compile.status.value == 'SUCCESS' else 'fail' }}">{{ report.compile.status.value }}</span>
+      <span class="tiny muted">退出码 {{ report.compile.exit_code }} · {{ report.compile.duration_ms }} ms</span>
+    </td></tr>
+    <tr><th>后端</th><td>
+      <span class="mono">{{ report.backend_id }}</span>
+      {% if report.sandbox_attested %}
+        <span class="badge pass">已通过隔离门禁</span>
+      {% else %}
+        <span class="badge not_observed">未通过隔离门禁，结果仅供参考</span>
+      {% endif %}
+      {% if report.simulated %}<span class="badge not_observed">模拟后端</span>{% endif %}
+    </td></tr>
+    <tr><th>汇总</th><td>
+      共 {{ report.summary.total }} 项：
+      <strong>{{ report.summary.passed }}</strong> 项符合，
+      <strong>{{ report.summary.defects }}</strong> 项不符，
+      {{ report.summary.not_observed }} 项未观察到
+    </td></tr>
+    <tr><th>时间</th><td class="tiny muted">{{ report.started_at }} → {{ report.finished_at }}</td></tr>
+  </table>
+  <p class="tiny muted">{{ report.note }}</p>
+
+  {% if report.compile.status.value != 'SUCCESS' %}
+  <div class="banner error">
+    编译未成功，未进入观察阶段。下面是编译器的诊断输出（已截断）：
+  </div>
+  <pre class="stdout">{{ compile_stderr or '(无输出)' }}</pre>
+  {% endif %}
+</section>
+
+{% if report.checks %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>观察结果</h2>
+    <span class="tiny muted">每条结论都能在“观察值与原始输出”里复核</span>
+  </div>
+  {% for check in report.checks %}
+  <div class="check-block">
+    <div class="check-title">
+      {% if check.verdict == 'PASS' %}
+        <span class="badge pass">符合</span>
+      {% elif check.verdict == 'DEFECT' %}
+        <span class="badge defect">不符</span>
+      {% else %}
+        <span class="badge not_observed">未观察到</span>
+      {% endif %}
+      <h3>{{ check.title }}</h3>
+      {% if check.rule_ref %}<span class="tiny muted">规则 {{ check.rule_ref }}</span>{% endif %}
+      <span class="tiny muted">{{ check.check_id }} · {{ check.elapsed_ms }} ms · {{ check.termination.value }}</span>
+    </div>
+    <p>{{ check.detail }}</p>
+    <p class="small muted">预期：{{ check.expectation }}</p>
+    <details class="details">
+      <summary>观察值与原始输出</summary>
+      <table class="kv wide">
+        {% for key, value in check.observed.items() %}
+        <tr>
+          <th>{{ key }}</th>
+          <td class="mono small">
+            {% if value is string %}{{ value }}
+            {% elif value is none %}(无)
+            {% else %}{{ value|tojson }}{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% if outputs.get(check.check_id) %}
+      <p class="tiny muted">程序输出（已截断）：</p>
+      <pre class="stdout">{{ outputs.get(check.check_id) }}</pre>
+      {% endif %}
+    </details>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

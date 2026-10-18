@@ -34,6 +34,12 @@ from ...domain.errors import AssessorError, InvalidInputError
 from ...domain.models import AssessmentReport, TaskCase
 from ...orchestrator.runner import RunOptions, execute_standard_run, make_backend, new_run_id
 from ...reporting.export import CSV_COLUMNS, report_json, report_rows
+from ...selfcheck import (
+    default_reference_source,
+    list_recent,
+    load_report,
+    run_selfcheck,
+)
 from ...storage.db import Database
 from ...tasks.loader import list_tasks, load_task
 
@@ -117,6 +123,22 @@ def _stored_error(settings: WebSettings, run_id: str) -> str | None:
     except OSError:
         return None
     return text or None
+
+
+def _selfcheck_dir(settings: WebSettings, selfcheck_id: str) -> Path:
+    if not _RUN_ID_PATTERN.fullmatch(selfcheck_id) or ".." in selfcheck_id:
+        raise HTTPException(status_code=400, detail="非法的自检编号")
+    return settings.data_root / "selfchecks" / selfcheck_id
+
+
+def _read_text_limited(path: Path, limit: int = 20_000) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+    if len(text) > limit:
+        return text[:limit] + "\n…（输出已截断）"
+    return text
 
 
 STALE_RUN_SECONDS = 180
@@ -516,6 +538,96 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             content=_csv_text(report),
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{run_id}.csv"'},
+        )
+
+    # -- 基准程序实测（观察型自检） -----------------------------------------
+
+    @app.get("/reference", response_class=HTMLResponse)
+    def reference_page(request: Request) -> HTMLResponse:
+        return _render(
+            request,
+            templates,
+            "reference.html",
+            default=default_reference_source(),
+            rows=list_recent(settings.data_root, limit=8),
+            settings=settings,
+        )
+
+    @app.post("/reference")
+    def create_selfcheck(
+        request: Request,
+        source: UploadFile | None = File(None),
+    ) -> Response:
+        if source is not None and source.filename:
+            upload_dir = app.state.upload_root / uuid.uuid4().hex
+            path = _save_upload(source, upload_dir, settings.max_upload_bytes)
+            kind = "upload"
+        else:
+            default = default_reference_source()
+            if default is None:
+                return _render(
+                    request,
+                    templates,
+                    "error.html",
+                    status_code=400,
+                    message="找不到随附的参考基准程序；请上传一个 .cpp 文件再试。",
+                )
+            path, kind = default, "reference"
+        try:
+            result = run_selfcheck(
+                path,
+                backend_name=settings.backend,
+                data_root=settings.data_root,
+                source_kind=kind,
+            )
+        except AssessorError as exc:
+            return _render(
+                request, templates, "error.html", status_code=400, message=str(exc)
+            )
+        return RedirectResponse(url=f"/reference/{result.report.selfcheck_id}", status_code=303)
+
+    @app.get("/reference/{selfcheck_id}", response_class=HTMLResponse)
+    def reference_result(request: Request, selfcheck_id: str) -> HTMLResponse:
+        run_dir = _selfcheck_dir(settings, selfcheck_id)
+        if not run_dir.is_dir():
+            return _render(
+                request,
+                templates,
+                "error.html",
+                status_code=404,
+                message=f"找不到实测记录：{selfcheck_id}",
+            )
+        try:
+            report = load_report(run_dir)
+        except AssessorError as exc:
+            return _render(request, templates, "error.html", status_code=404, message=str(exc))
+        outputs = {
+            check.check_id: _read_text_limited(
+                run_dir / "cases" / check.check_id / "stdout.txt"
+            )
+            for check in report.checks
+        }
+        return _render(
+            request,
+            templates,
+            "reference_result.html",
+            report=report,
+            outputs=outputs,
+            compile_stderr=_read_text_limited(run_dir / "build" / "compile.stderr.txt"),
+            settings=settings,
+        )
+
+    @app.get("/reference/{selfcheck_id}/report.json")
+    def download_selfcheck(selfcheck_id: str) -> Response:
+        path = _selfcheck_dir(settings, selfcheck_id) / "report.json"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="报告尚未生成")
+        return Response(
+            content=path.read_bytes(),
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{selfcheck_id}.json"'
+            },
         )
 
     @app.get("/healthz")

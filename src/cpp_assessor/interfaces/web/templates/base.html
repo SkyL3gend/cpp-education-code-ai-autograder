@@ -12,6 +12,7 @@
   <nav class="nav">
     <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">题库</a>
     <a href="/runs" class="{{ 'active' if request.url.path == '/runs' else '' }}">运行记录</a>
+    <a href="/reference" class="{{ 'active' if request.url.path.startswith('/reference') else '' }}">基准程序实测</a>
   </nav>
   <span class="version">v{{ app_version }}</span>
 </header>

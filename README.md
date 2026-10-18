@@ -5,9 +5,12 @@
 的完整闭环——导入提交、构建受测工程、在受限后端中执行预配置用例、用可信断言
 比对观测、生成可追溯的结构化 JSON 报告，并用参照版本完成校准。
 
-当前版本（0.2.1）在 CLI 之上增加了**本地 Web 界面**，同样只覆盖模式一：
+当前版本（0.3.0）在 CLI 之上增加了**本地 Web 界面**，并新增**基准程序实测**
+（观察型自检）：把随附的《参考基准程序/通讯录_v6最终版.cpp》真实编译、按脚本
+驱动、提取可观察行为并按规则列出“符合 / 不符 / 未观察到”。它同样只覆盖模式一：
 不包含 LLM 诊断与模式二（LLM 生成判断程序）。这符合实施方案 §14 的实施顺序，
-也保证“正确性由测试用例判定”的底线先立起来。
+也保证“正确性由测试用例判定”的底线先立起来。实测是**观察型**的，不参与五道
+小改题的 PASS/FAIL 判定，也不产生 `grade_eligible`。
 
 ## 1. 已实现的功能
 
@@ -23,6 +26,10 @@
 - **本地 Web 界面**：浏览器里选题、上传提交（目录 / 单文件 / ZIP）、查看等待与
   结果页、下载 JSON/CSV、取消运行；后端用单线程队列串行执行，与 CLI 共用同一套
   运行器、判定与证据。
+- **基准程序实测（观察型）**：对随附的参考程序做真实编译与脚本化运行，
+  用可信提取器从原始输出中判定 5 条检查（菜单可启动、手机号必须为 11 位数字、
+  当天生日提醒、姓名检索不区分大小写、日期合法性），给出 `PASS` / `DEFECT` /
+  `NOT_OBSERVED` 与证据文件；**不参与五题评分**，也不产生 `grade_eligible`。
 - **校准**：`tools/calibrate.py` 对每题运行“正确实现”和“已知缺陷实现”，
   校验正确实现通过、缺陷实现被指定用例识别，并写入 SQLite 与 JSON 记录。
 - **执行后端**：本地 Win32 Job Object 受限后端（CPU/内存/进程数/墙钟/进程树终止）
@@ -79,7 +86,10 @@ python assessor.py web
 #    本机后端未过门禁时，允许在 Web 里显式放行：
 python assessor.py web --allow-unattested-backend
 
-# 7) 回归测试
+# 7) 基准程序实测（观察型，不参与五题评分）
+python assessor.py selfcheck
+
+# 8) 回归测试
 python -m pytest
 python tools\calibrate.py
 ```
@@ -111,6 +121,33 @@ Web 端只负责“选题—提交—查看—导出”，判定完全复用 CLI
 > 提交对象是任务页下载的**基准工程**（`contactbook_base`）。仓库里的
 > 《参考基准程序/通讯录_v6最终版.cpp》是出题背景，结构与基准工程不同，直接提交会
 > 得到 `INVALID_INPUT` / `NOT_ASSESSED`（报告页会说明原因）。
+
+### 基准程序实测（观察型）
+
+```powershell
+python assessor.py selfcheck                              # 默认测 参考基准程序/通讯录_v6最终版.cpp
+python assessor.py selfcheck --source path\to\other.cpp   # 测别的单文件 C++ 程序
+python assessor.py selfcheck --json                       # 只输出 JSON 摘要
+```
+
+界面入口：`GET /reference`（页面左侧导航“基准程序实测”），提交后可下载
+`report.json` 与逐检查的原始 stdout/stderr。报告落在 `data/selfchecks/<selfcheck_id>/`。
+
+它做的事情是：用与五道题**相同的**编译/受限执行/工件基础设施，真实运行程序，
+再用预设脚本驱动菜单，从原始输出中提取可观察事实并按规则判定：
+
+| 检查 | 观察 | 参考程序当前结论 |
+| --- | --- | --- |
+| `smoke_menu` | 程序能启动并打印主菜单 | `PASS` |
+| `phone_digits` | 11 位但含非数字的手机号是否被拒绝 | `DEFECT`（接受了 `1380013800a`） |
+| `birthday_today` | 当天生日是否出现在“未来 N 天”提醒里 | `PASS` |
+| `name_search_case` | 姓名检索是否不区分大小写并返回全部匹配 | `DEFECT`（`an` 只返回 `annabel`） |
+| `date_validation` | `1900-02-29`、`2023-04-31` 是否被拒绝 | `PASS` |
+
+`DEFECT` 表示“程序的实际行为与规则不符”，是该程序自身的行为结论；`NOT_OBSERVED`
+表示脚本没能驱动到可判断的位置（不会当成通过）。**这套实测不产生 PASS/FAIL 成绩，
+也不写入五题题库的校准记录**——它解决的是“想看看参考程序自己哪里不对”，而不是
+“给学生打分”。
 
 ### 关于“不计入正式成绩”
 
@@ -154,9 +191,12 @@ Web 端只负责“选题—提交—查看—导出”，判定完全复用 CLI
 | `assessor report <run_id> --format json\|csv [--out <path>]` | 导出报告；CSV 带 BOM 且做了公式注入防护 |
 | `assessor replay <run_id>` | 用保存的观测重新执行断言，与报告逐条比对 |
 | `assessor web [--host] [--port] [--backend local\|mock] [--allow-unattested-backend] [--allow-draft] [--no-open]` | 启动本地 Web 界面 |
+| `assessor selfcheck [--source <file.cpp>] [--backend local\|mock] [--json] [--strict]` | 基准程序实测（观察型，不参与评分）；`--strict` 时有缺陷返回 1 |
 
 `run` 的退出码：`0` 通过、`1` 失败、`2` 未测评、`3` 不确定、`4` 基础设施错误、
 `130` 取消。**退出码不区分是否具备正式评分资格**，资格请看报告里的 `grade_eligible`。
+`selfcheck` 的退出码：`0` 正常完成（无论是否有缺陷）、`1` 指定 `--strict` 且存在缺陷、
+`2` 编译失败。
 
 ## 6. 一次运行的产出
 
@@ -175,6 +215,7 @@ data/
     evidence/cases/<case>/         # 请求、观测、原始 stdout/stderr、工作目录
 data/exports/<run_id>.csv          # 按需导出
 data/calibrations/<task>.json      # 校准记录
+data/selfchecks/<selfcheck_id>/    # 基准程序实测：source/ build/ cases/<检查>/ report.json
 ```
 
 运行目录中的 `objective_report.json` 是判定的权威来源；`assessor replay` 只读
@@ -191,6 +232,7 @@ src/cpp_assessor/
   orchestrator/ # 协议信封、标准测评运行器（状态机、预算、取消）
   judge/        # 断言引擎、覆盖计算、判定聚合
   storage/      # SQLite、工件存储
+  selfcheck/    # 基准程序实测：检查定义、提取与判定、受限执行、报告
   reporting/    # JSON/CSV 导出
   interfaces/   # CLI 与本地 Web（FastAPI + Jinja2 模板 + 静态资源）
 task_library/
@@ -229,6 +271,9 @@ docs/           # 使用手册、设计说明、实验报告
    暂未使用；后续题库会补充“操作前后不变”的用例。
 7. **提交匹配**：学生提交按相对路径覆盖基准工程，找不到时用唯一文件名匹配；
    生产环境应加入更严格的工程结构校验与人工复核入口。
+8. **基准程序实测是观察型的**：它固定测量 5 条检查、依赖程序菜单文本作为锚点，
+   结论是“该程序的行为观察”，不是完整评分；更换程序时锚点可能需要调整，
+   驱动不到的位置会明确记为 `NOT_OBSERVED` 而不是猜。
 
 ## 10. 文档
 

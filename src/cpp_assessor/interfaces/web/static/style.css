@@ -260,6 +260,27 @@ a:hover { text-decoration: underline; }
   padding: 24px 16px 40px;
 }
 
+/* 基准程序实测：观察结论与原始输出 */
+.badge.defect { background: var(--fail-bg); color: var(--fail); }
+.badge.not_observed { background: #eceff4; color: #59616e; }
+.check-block { border-top: 1px solid var(--border); padding: 14px 0 6px; }
+.check-block:first-of-type { border-top: none; }
+.check-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.check-title h3 { margin: 0; font-size: 15px; }
+.stdout {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  background: #f6f7fb;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow: auto;
+}
+
 @media (max-width: 760px) {
   .two-col { grid-template-columns: 1fr; }
   .run-hero { flex-direction: column; }

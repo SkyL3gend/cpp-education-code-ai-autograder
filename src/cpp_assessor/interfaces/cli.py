@@ -13,6 +13,7 @@
     assessor cancel <run_id>
     assessor report <run_id> [--format json|csv] [--out <path>]
     assessor replay <run_id>
+    assessor selfcheck [--source <file.cpp>] [--backend local|mock] [--json] [--strict]
     assessor web [--host] [--port] [--backend local|mock]
                  [--allow-unattested-backend] [--allow-draft] [--no-open]
 
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..config import data_dir
-from ..domain.enums import ComparisonStatus, ProtocolStatus
+from ..domain.enums import ComparisonStatus, CompileStatus, ProtocolStatus
 from ..domain.errors import AssessorError, InvalidInputError
 from ..domain.models import AssessmentReport, Observation
 from ..judge.assertions import evaluate
@@ -44,6 +45,7 @@ from ..reporting.export import (
     write_csv,
     write_json,
 )
+from ..selfcheck import default_reference_source, run_selfcheck
 from ..storage.db import Database
 from ..tasks.loader import list_tasks, load_task, publish_task, validate_task
 
@@ -310,6 +312,65 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# selfcheck 子命令
+# ---------------------------------------------------------------------------
+
+_VERDICT_MARKS = {"PASS": "OK  ", "DEFECT": "缺陷", "NOT_OBSERVED": "未观察"}
+
+
+def _cmd_selfcheck(args: argparse.Namespace) -> int:
+    source = Path(args.source) if args.source else default_reference_source()
+    if source is None:
+        raise InvalidInputError(
+            "找不到随附的参考基准程序；请用 --source 指定一个 .cpp 文件"
+        )
+    result = run_selfcheck(
+        source,
+        backend_name=args.backend,
+        source_kind="upload" if args.source else "reference",
+    )
+    report = result.report
+    if args.json:
+        _print_json(report.model_dump(mode="json"))
+    else:
+        print(f"基准程序实测：{report.selfcheck_id}")
+        print(f"源码：{report.source_name}（sha256 {report.source_sha256[:12]}…）")
+        gate = "通过隔离门禁" if report.sandbox_attested else "未通过隔离门禁，结果仅供参考"
+        print(f"后端：{report.backend_id}（{gate}）")
+        print(
+            f"编译：{report.compile.status.value}"
+            f"（{report.compile.duration_ms} ms，退出码 {report.compile.exit_code}）"
+        )
+        print("观察结果：")
+        if report.compile.status is not CompileStatus.SUCCESS:
+            stderr_path = result.run_dir / report.compile.stderr_ref
+            print(f"  编译未通过，未执行任何检查。编译输出：{stderr_path}")
+            if stderr_path.is_file():
+                for line in stderr_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()[:6]:
+                    print(f"    {line}")
+        for check in report.checks:
+            mark = _VERDICT_MARKS.get(check.verdict, check.verdict)
+            print(f"  [{mark}] {check.check_id}：{check.title}")
+            print(f"         {check.detail}")
+        summary = report.summary
+        print(
+            f"汇总：共 {summary.total} 项，符合 {summary.passed}，"
+            f"不符 {summary.defects}，未观察到 {summary.not_observed}"
+        )
+        print(f"报告：{result.report_path}")
+        print(
+            "说明：这是观察型自检，用固定脚本驱动程序行为，不参与五道小改题的评分。"
+        )
+    if report.compile.status is not CompileStatus.SUCCESS:
+        return 2
+    if args.strict and report.summary.defects:
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # web 子命令
 # ---------------------------------------------------------------------------
 
@@ -405,6 +466,19 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser = sub.add_parser("replay", help="用已保存的证据复现判定")
     replay_parser.add_argument("run_id")
     replay_parser.set_defaults(func=_cmd_replay)
+
+    selfcheck_parser = sub.add_parser(
+        "selfcheck", help="实测一个原始 C++ 程序（观察型自检，不参与五题评分）"
+    )
+    selfcheck_parser.add_argument(
+        "--source", help="要实测的 .cpp 文件；默认使用随附的参考基准程序"
+    )
+    selfcheck_parser.add_argument("--backend", default="local", choices=["local", "mock"])
+    selfcheck_parser.add_argument("--json", action="store_true", help="输出 JSON 报告")
+    selfcheck_parser.add_argument(
+        "--strict", action="store_true", help="发现 DEFECT 时返回退出码 1"
+    )
+    selfcheck_parser.set_defaults(func=_cmd_selfcheck)
 
     web_parser = sub.add_parser("web", help="启动本地 Web 界面")
     web_parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认仅本机）")

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}基准程序实测{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>基准程序实测（观察型自检）</h2>
+  </div>
+  <p>
+    把原始 C++ 程序编译后，用固定脚本驱动它自己的菜单，观察几条关键规则是否成立，
+    并把程序输出原样保存为证据。
+  </p>
+  <div class="banner warn">
+    <strong>这不是五道小改题的评分。</strong>
+    自检没有任务包、没有 oracle，结论只有“符合 / 不符 / 未观察到”，不产生
+    <span class="mono">grade_eligible</span>；它回答的是“这个程序现在表现如何”。
+  </div>
+  <table class="kv">
+    <tr><th>默认实测对象</th><td>
+      {% if default %}
+        <span class="mono">{{ default }}</span>
+      {% else %}
+        <span class="muted">未找到随附的参考基准程序，请上传一个 .cpp 文件</span>
+      {% endif %}
+    </td></tr>
+    <tr><th>要做的事</th><td>真实编译一次，然后运行 5 个固定脚本：启动菜单、手机号校验、生日提醒、姓名检索、日期校验。</td></tr>
+    <tr><th>耗时</th><td>通常几秒（编译约 2 秒 + 5 次运行）。</td></tr>
+  </table>
+
+  <form class="form" method="post" action="/reference" enctype="multipart/form-data">
+    <label class="field">
+      <span>可选：上传另一个 .cpp 文件（留空则实测上面的默认文件）</span>
+      <input type="file" name="source" accept=".cpp">
+    </label>
+    <div>
+      <button class="button primary" type="submit">开始实测</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>最近的实测</h2>
+    <span class="tiny muted">共 {{ rows|length }} 条</span>
+  </div>
+  {% if rows %}
+  <table class="table">
+    <thead>
+      <tr><th>实测编号</th><th>源码</th><th>编译</th><th>符合</th><th>不符</th><th>未观察</th><th>完成时间</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td><a href="/reference/{{ row.selfcheck_id }}">{{ row.selfcheck_id }}</a></td>
+        <td class="mono small">{{ row.source_name }}</td>
+        <td><span class="badge {{ 'pass' if row.compile_status == 'SUCCESS' else 'fail' }}">{{ row.compile_status }}</span></td>
+        <td>{{ row.passed }}</td>
+        <td>{{ row.defects }}</td>
+        <td>{{ row.not_observed }}</td>
+        <td class="tiny muted">{{ row.finished_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">还没有实测记录。</p>
+  {% endif %}
+</section>
+{% endblock %}
