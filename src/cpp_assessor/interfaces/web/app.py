@@ -13,11 +13,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import threading
 import uuid
 import webbrowser
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +53,16 @@ REASON_LABELS = {
     "ADAPTER_OR_INFRA_FAULT": "出现适配器或基础设施故障",
     "TASK_NOT_PUBLISHED": "任务未发布（DRAFT）",
     "ASSERTIONS_NOT_CONFIRMED": "期望值未经参照版本确认",
+    "EXECUTION_INVALID_INPUT": "提交内容或参数不合法，未进入测评",
+    "EXECUTION_UNSUPPORTED": "当前环境不支持该执行方式（如隔离后端缺失）",
+    "EXECUTION_BUILD_UNRESOLVED": "无法从提交内容确定构建方案",
+    "EXECUTION_BUDGET_EXCEEDED": "本次运行超出时间/资源预算",
+    "EXECUTION_INFRA_ERROR": "系统内部错误，未得到有效测评结果",
+    "EXECUTION_ADAPTATION_FAILED": "适配阶段失败，无法可靠观测被测程序",
+    "RUN_CANCELLED": "运行已被取消",
+    "SUBMISSION_COMPILE_ERROR": "提交代码编译失败",
+    "NO_CASES_EXECUTED": "没有任何用例被执行",
+    "VALIDATION_LEVEL_UNVERIFIED": "任务包或提交未经校验，不能正式判定",
 }
 
 
@@ -70,7 +83,13 @@ class WebSettings:
 # ---------------------------------------------------------------------------
 
 
+_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
+
+
 def _run_dir(settings: WebSettings, run_id: str) -> Path:
+    # run_id 直接来自 URL，必须限制字符集，避免 ../ 之类路径穿越读写出根目录。
+    if not _RUN_ID_PATTERN.fullmatch(run_id) or ".." in run_id:
+        raise HTTPException(status_code=400, detail=f"非法的运行编号：{run_id}")
     return settings.data_root / "runs" / run_id
 
 
@@ -86,6 +105,37 @@ def _read_report(settings: WebSettings, run_id: str) -> AssessmentReport | None:
         return AssessmentReport.model_validate(json.loads(path.read_text(encoding="utf-8")))
     except (ValueError, OSError):
         return None
+
+
+def _stored_error(settings: WebSettings, run_id: str) -> str | None:
+    """读取运行器先于数据库收尾写下的错误说明（存在时间窗口）。"""
+    path = _run_dir(settings, run_id) / "evidence" / "run_error.txt"
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
+STALE_RUN_SECONDS = 180
+
+
+def _interrupted(row: Any) -> bool:
+    """运行进程已退出却留下未收尾的记录（例如服务重启、线程内异常退出）。
+
+    判定依据：数据库行不是终态，且超过 STALE_RUN_SECONDS 没有更新。
+    """
+    if row is None or row.workflow_state in TERMINAL_WORKFLOW_STATES:
+        return False
+    try:
+        stamp = datetime.fromisoformat(row.updated_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - stamp).total_seconds() > STALE_RUN_SECONDS
 
 
 def _csv_text(report: AssessmentReport) -> str:
@@ -243,6 +293,28 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             settings=settings,
         )
 
+    @app.get("/tasks/{task_ref}/base.zip")
+    def download_base_project(task_ref: str) -> Response:
+        """把任务对应的基准工程打包下载，避免学生误交“参考基准程序”。"""
+        try:
+            task = load_task(task_ref, task_library=settings.library, allow_draft=True)
+        except AssessorError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        project = task.document.project_ref
+        prefix = f"{project.project_id}-{project.version}"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(task.project_root.rglob("*")):
+                if not path.is_file():
+                    continue
+                arcname = f"{prefix}/{path.relative_to(task.project_root).as_posix()}"
+                archive.write(path, arcname=arcname)
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{prefix}.zip"'},
+        )
+
     # -- 提交与运行 ---------------------------------------------------------
 
     @app.post("/runs")
@@ -313,13 +385,27 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
     def run_page(request: Request, run_id: str) -> HTMLResponse:
         report = _read_report(settings, run_id)
         row = db().get_run(run_id)
-        if report is None and row is None:
+        # 303 重定向发生在后台线程建库/建目录之前，因此这里必须把“已排队”
+        # 也当作合法运行，否则刚提交就会误报 404。
+        in_flight = run_id in app.state.pending or run_id in app.state.errors
+        run_dir_exists = _run_dir(settings, run_id).is_dir()
+        if report is None and row is None and not in_flight and not run_dir_exists:
             return _render(
                 request,
                 templates,
                 "error.html",
                 status_code=404,
                 message=f"找不到运行记录：{run_id}",
+            )
+        error = (
+            app.state.errors.get(run_id)
+            or (row.error if row else None)
+            or _stored_error(settings, run_id)
+        )
+        if report is None and error is None and _interrupted(row):
+            error = (
+                "运行已中断：后台进程已退出（可能是服务重启或运行器异常），"
+                "本次没有生成报告，请重新提交。"
             )
         if report is None:
             return _render(
@@ -328,7 +414,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
                 "run_waiting.html",
                 run_id=run_id,
                 row=row,
-                error=app.state.errors.get(run_id),
+                error=error,
                 settings=settings,
             )
         return _render(
@@ -337,6 +423,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             "run.html",
             report=report,
             row=row,
+            error=error,
             badge=_status_badge(report),
             reason_labels=REASON_LABELS,
             settings=settings,
@@ -355,7 +442,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         elif row is not None and row.workflow_state in TERMINAL_WORKFLOW_STATES:
             state = "done" if row.workflow_state == "COMPLETED" else "failed"
         elif row is not None:
-            state = "running"
+            state = "failed" if _interrupted(row) else "running"
         else:
             state = "unknown"
         # 报告文件先于数据库收尾落盘，因此以报告为准补充状态，避免读到“已完成但
@@ -380,11 +467,18 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             if row is not None
             else ("COMPLETED" if report is not None else None)
         )
+        api_error = (
+            app.state.errors.get(run_id)
+            or (row.error if row else None)
+            or _stored_error(settings, run_id)
+        )
+        if state == "failed" and api_error is None:
+            api_error = "运行已中断且没有生成报告，请重新提交。"
         return JSONResponse(
             {
                 "run_id": run_id,
                 "state": state,
-                "error": app.state.errors.get(run_id),
+                "error": api_error,
                 "workflow_state": workflow_state,
                 "execution_status": execution_status,
                 "assessment_status": assessment_status,

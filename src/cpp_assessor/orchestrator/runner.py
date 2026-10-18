@@ -339,12 +339,16 @@ class _StandardRun:
             self.workflow_state = WorkflowState.CANCELLED
         except AssessorError as exc:
             # 预期内失败：保存部分报告后正常收尾（§6.1）。
-            self.execution_status = exc.execution_status
+            self.execution_status = ExecutionStatus(exc.execution_status)
             self.error = str(exc)
+            # 报告先于数据库收尾落盘，页面可能先读到报告；错误说明另存一份，
+            # 避免只有数据库行里才有错误信息而出现“有报告没原因”的窗口期。
+            self.store.write_text("evidence", "run_error.txt", self.error)
         except Exception as exc:  # noqa: BLE001 - 内部异常一律 FAILED
             self.execution_status = ExecutionStatus.INFRA_ERROR
             self.error = f"内部错误：{type(exc).__name__}: {exc}"
             self.workflow_state = WorkflowState.FAILED
+            self.store.write_text("evidence", "run_error.txt", self.error)
             self.store.write_text("evidence", "internal_error.txt", traceback.format_exc())
         finally:
             self._phase_report()
@@ -445,7 +449,9 @@ class _StandardRun:
         ]
         if not source_files:
             raise InvalidInputError(
-                "提交内容里没有源码/头文件（.cpp/.h）；请提交与基准工程对应的源码文件"
+                "提交内容里没有源码/头文件（.cpp/.h）。请提交基于任务基准工程"
+                "（task_library/projects/contactbook_base/1.0.0）修改后的源码；"
+                "「参考基准程序/通讯录_v6最终版.cpp」只是出题背景，不是本任务的提交对象。"
             )
 
         overridden: list[str] = []
@@ -479,8 +485,10 @@ class _StandardRun:
         matched_sources = [p for p in self.overridden if Path(p).suffix.lower() in _OVERLAY_SUFFIXES]
         if not matched_sources:
             raise InvalidInputError(
-                "提交的源码文件没有匹配基准工程中的任何文件；"
-                "请保持相对路径（如 validators.cpp / contactbook.cpp / contactbook.h）"
+                "提交的源码没有匹配基准工程中的任何文件；请提交对 "
+                "task_library/projects/contactbook_base/1.0.0 的修改（保留相对路径，"
+                "如 validators.cpp / contactbook.cpp / contactbook.h）。"
+                "「参考基准程序/通讯录_v6最终版.cpp」是出题背景，不能被本任务直接测评。"
             )
 
     # -- 阶段 2：任务解析（已在 load_task 完成，这里只记录） ------------------
@@ -976,7 +984,8 @@ class _StandardRun:
         counts: ReportCounts,
         case_results: list[CaseResult],
     ) -> AssessmentReport:
-        assert self.plan is not None
+        # 注意：导入/校验阶段失败时 plan 可能尚未生成，报告仍必须落盘，
+        # 否则用户只能看到一条无报告的错误运行（曾导致 /runs/<id> 404）。
         published = self.task.task_spec.publication_status is PublicationStatus.PUBLISHED
         confirmed = self._cases_confirmed()
         validation_level = (
@@ -994,7 +1003,13 @@ class _StandardRun:
             execution_backend_attested=self.attested,
         )
         evidence = list(dict.fromkeys(ref for ref in self.evidence_refs if ref))
-        evidence.extend(["plans/test_plan.json", "plans/build_plan.json", "plans/validation.json"])
+        if self.plan is not None:
+            evidence.append("plans/test_plan.json")
+        if self.build_plan is not None:
+            evidence.append("plans/build_plan.json")
+        if self.validation is not None:
+            evidence.append("plans/validation.json")
+        evidence = list(dict.fromkeys(evidence))
         note = None
         if getattr(self.backend, "simulated", False):
             note = (
@@ -1144,6 +1159,8 @@ class _StandardRun:
 
     # -- 收尾 ---------------------------------------------------------------
     def _finish(self) -> RunResult:
+        # 防御性归一：任何路径都不应把字符串写进 execution_status（曾触发 _finish AttributeError）。
+        self.execution_status = ExecutionStatus(self.execution_status)
         assessment_status = self.report.assessment_status if self.report else None
         report_path = "objective_report.json" if self.report else None
         if self.workflow_state is not WorkflowState.CANCELLED and self.workflow_state is not WorkflowState.FAILED:

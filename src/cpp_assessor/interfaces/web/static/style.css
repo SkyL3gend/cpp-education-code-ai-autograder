@@ -212,6 +212,7 @@ a:hover { text-decoration: underline; }
 .rules li { margin: 7px 0; }
 
 .crumbs { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.inline-link { margin-left: 8px; font-size: 13px; border-bottom: 1px dashed currentColor; }
 
 .mono { font-family: var(--mono); }
 .small { font-size: 13px; }

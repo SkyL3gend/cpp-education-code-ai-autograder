@@ -78,6 +78,33 @@ def test_compile_error_skips_cases_and_reports_submission_fault(tmp_path):
     assert result.report.counts.attempted_cases == 0
 
 
+def test_unrelated_source_file_reports_invalid_input_with_report(tmp_path):
+    """提交与基准工程无关的源码：必须落盘一份 INVALID_INPUT/NOT_ASSESSED 报告，
+    而不是让运行卡在 REPORTING（历史缺陷：_assemble_report 断言 plan 非空）。"""
+    submission = tmp_path / "student"
+    submission.mkdir()
+    (submission / "unrelated.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8", newline="\n"
+    )
+    result = execute_standard_run(
+        RunOptions(
+            task_ref="t1_phone_validation@1.0.0",
+            submission=submission,
+            backend="local",
+            allow_unattested=True,
+            data_dir=tmp_path / "run_data",
+        )
+    )
+    assert result.workflow_state is WorkflowState.COMPLETED
+    assert result.execution_status is ExecutionStatus.INVALID_INPUT
+    assert result.assessment_status is OverallStatus.NOT_ASSESSED
+    assert result.grade_eligible is False
+    assert (result.run_dir / "objective_report.json").is_file()
+    assert result.report is not None
+    assert result.report.counts.attempted_cases == 0
+    assert "参考基准程序" in (result.error or "")
+
+
 def test_mock_backend_marks_execution_as_simulated(tmp_path):
     result = execute_standard_run(
         RunOptions(

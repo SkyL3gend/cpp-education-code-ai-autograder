@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import io
 import shutil
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -126,3 +128,54 @@ def test_cancel_writes_flag_file(client: TestClient, tmp_path: Path) -> None:
     response = client.post(f"/runs/{run_id}/cancel", follow_redirects=False)
     assert response.status_code == 303
     assert (tmp_path / "data" / "runs" / run_id / "CANCEL").is_file()
+
+
+def test_queued_run_page_is_not_404(client: TestClient) -> None:
+    """303 重定向可能早于后台线程建库：已排队的 run 不能报“找不到”。"""
+    client.app.state.pending["run_queued_demo"] = "queued"
+    response = client.get("/runs/run_queued_demo")
+    assert response.status_code == 200
+    assert "任务已排队" in response.text
+
+
+def test_invalid_submission_renders_report_instead_of_crashing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    submission = tmp_path / "unrelated.cpp"
+    submission.write_text("int main() { return 0; }\n", encoding="utf-8", newline="\n")
+    response = client.post(
+        "/runs",
+        data={"task_ref": TASK_REF},
+        files={"submission": ("unrelated.cpp", submission.read_bytes())},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    run_id = response.headers["location"].rsplit("/", 1)[-1]
+
+    status = _wait_for_run(client, run_id)
+    assert status["state"] == "done"
+    assert status["execution_status"] == "INVALID_INPUT"
+    assert status["assessment_status"] == "NOT_ASSESSED"
+
+    page = client.get(f"/runs/{run_id}")
+    assert page.status_code == 200
+    assert "INVALID_INPUT" in page.text
+    assert "参考基准程序" in page.text
+
+
+def test_run_id_with_dotdot_is_rejected(client: TestClient) -> None:
+    assert client.get("/runs/bad..id").status_code == 400
+
+
+def test_base_project_download_and_submission_guidance(client: TestClient) -> None:
+    page = client.get(f"/tasks/{TASK_REF}")
+    assert "/base.zip" in page.text
+    assert "不能直接提交" in page.text
+
+    archive = client.get(f"/tasks/{TASK_REF}/base.zip")
+    assert archive.status_code == 200
+    assert archive.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(archive.content)) as handle:
+        names = handle.namelist()
+    assert any(name.endswith("validators.cpp") for name in names)
+    assert any(name.endswith("contactbook.h") for name in names)

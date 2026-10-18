@@ -28,6 +28,12 @@
 </div>
 {% endif %}
 
+{% if error %}
+<div class="banner warn">
+  <strong>本次运行未能完成测评</strong>：{{ error }}
+</div>
+{% endif %}
+
 <section class="panel">
   <table class="kv wide">
     <tr><th>执行状态</th><td><span class="badge {{ report.execution_status.value|lower }}">{{ report.execution_status.value }}</span></td>

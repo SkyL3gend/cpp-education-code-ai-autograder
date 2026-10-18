@@ -1,22 +1,26 @@
 """领域异常。
 
 每一类异常对应报告中一个明确的 execution_status，避免"笼统失败"。
+execution_status 必须是 ExecutionStatus 枚举成员——报告与收尾代码依赖 .value，
+也曾因写成字符串而在 _finish() 处触发 AttributeError。
 """
 
 from __future__ import annotations
+
+from .enums import ExecutionStatus
 
 
 class AssessorError(Exception):
     """所有本系统异常的基类。"""
 
-    execution_status = "INFRA_ERROR"
+    execution_status: ExecutionStatus = ExecutionStatus.INFRA_ERROR
     exit_code = 1
 
 
 class InvalidInputError(AssessorError):
     """提交内容、任务包或参数不合法。"""
 
-    execution_status = "INVALID_INPUT"
+    execution_status = ExecutionStatus.INVALID_INPUT
     exit_code = 2
 
 
@@ -31,36 +35,36 @@ class TaskNotPublishedError(InvalidInputError):
 class BuildUnresolvedError(AssessorError):
     """无法根据提交内容确定构建方案（缺文件、入口不明等）。"""
 
-    execution_status = "BUILD_UNRESOLVED"
+    execution_status = ExecutionStatus.BUILD_UNRESOLVED
 
 
 class SandboxUnavailableError(AssessorError):
     """所需隔离后端不可用。"""
 
-    execution_status = "UNSUPPORTED"
+    execution_status = ExecutionStatus.UNSUPPORTED
 
 
 class BackendNotAttestedError(AssessorError):
     """隔离能力未达门禁要求，拒绝执行真实提交。"""
 
-    execution_status = "UNSUPPORTED"
+    execution_status = ExecutionStatus.UNSUPPORTED
 
 
 class BudgetExceededError(AssessorError):
     """超出预算（总时长、用例数等）。"""
 
-    execution_status = "BUDGET_EXCEEDED"
+    execution_status = ExecutionStatus.BUDGET_EXCEEDED
     exit_code = 4
 
 
 class ProtocolError(AssessorError):
     """被测程序输出的观测协议不合法。"""
 
-    execution_status = "ADAPTATION_FAILED"
+    execution_status = ExecutionStatus.ADAPTATION_FAILED
 
 
 class CancelledError(AssessorError):
     """运行被取消。"""
 
-    execution_status = "CANCELLED"
+    execution_status = ExecutionStatus.CANCELLED
     exit_code = 130

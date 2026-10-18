@@ -32,7 +32,8 @@
       <tr><th>被测层级</th><td>{{ task.method.subject_level.value }}</td></tr>
       <tr><th>输入分区</th><td>{{ task.method.input_partitions|length }} 个</td></tr>
       <tr><th>断言</th><td>{{ task.method.assertions|length }} 条</td></tr>
-      <tr><th>基准工程</th><td class="mono small">{{ task.document.project_ref.project_id }}@{{ task.document.project_ref.version }}</td></tr>
+      <tr><th>基准工程</th><td class="mono small">{{ task.document.project_ref.project_id }}@{{ task.document.project_ref.version }}
+        <a class="inline-link" href="/tasks/{{ task.task_id }}@{{ task.version }}/base.zip">下载可修改工程</a></td></tr>
     </table>
   </section>
 </div>
@@ -89,6 +90,10 @@
     <p class="muted small">
       支持 <code>.zip</code>（包含工程相对路径）或单个 <code>.cpp/.h/.hpp</code> 文件。
       提交会按相对路径覆盖基准工程中的同名文件；找不到对应文件时拒绝。
+    </p>
+    <p class="muted small">
+      请先在上方下载并修改本任务的基准工程，再提交修改后的源码。
+      仓库里的《参考基准程序/通讯录_v6最终版.cpp》只是出题背景，代码结构与本任务基准工程不同，<strong>不能直接提交</strong>。
     </p>
     <form method="post" action="/runs" enctype="multipart/form-data" class="form">
       <input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
