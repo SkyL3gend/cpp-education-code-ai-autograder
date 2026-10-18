@@ -953,6 +953,19 @@ class ModeTwoRun:
             )
         if execution_status is ExecutionStatus.ADAPTATION_FAILED:
             notes.append("适配未完成，未执行正式用例：" + (state.error or ""))
+        if state.bundle is not None:
+            matrix_ref = "plans/migration_matrix.json"
+            self._persist_json(
+                matrix_ref,
+                {
+                    "task_id": spec.task_id,
+                    "assertion_bindings": [item.model_dump() for item in state.bundle.assertion_bindings],
+                    "migration_matrix": [item.model_dump() for item in state.bundle.migration_matrix],
+                    "coverage_gaps": list(state.bundle.coverage_gaps),
+                },
+            )
+            if matrix_ref not in state.evidence:
+                state.evidence.append(matrix_ref)
         evidence = list(dict.fromkeys(state.evidence))
         report = AssessmentReport(
             schema_version=SCHEMA_VERSION,
