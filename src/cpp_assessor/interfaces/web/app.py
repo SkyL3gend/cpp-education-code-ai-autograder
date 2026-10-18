@@ -14,6 +14,7 @@ import csv
 import io
 import json
 import re
+import shutil
 import threading
 import uuid
 import webbrowser
@@ -46,12 +47,14 @@ from ...tasks.loader import list_tasks, load_task
 from .batch import (
     MAX_PROGRAMS,
     MAX_TASKS,
+    PROGRAM_SUFFIXES,
     batch_directory,
     build_batch,
     count_progress,
     list_batches,
     matrix,
     new_batch_id,
+    prepare_program,
     read_batch,
     write_batch,
 )
@@ -218,11 +221,16 @@ def _case_rows(task: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def _save_upload(upload: UploadFile, destination: Path, max_bytes: int) -> Path:
+def _save_upload(
+    upload: UploadFile,
+    destination: Path,
+    max_bytes: int,
+    allowed: set[str] = ALLOWED_UPLOAD_SUFFIXES,
+) -> Path:
     """把上传内容写到磁盘，超过上限立即拒绝（不信任 Content-Length）。"""
     name = Path(upload.filename or "upload.bin").name
     suffix = Path(name).suffix.lower()
-    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+    if suffix not in allowed:
         raise InvalidInputError(
             f"不支持的提交格式：{suffix or '(无扩展名)'}；请上传 .zip、.cpp、.h 或 .hpp"
         )
@@ -384,7 +392,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             for path in sorted(task.project_root.rglob("*")):
                 if not path.is_file():
                     continue
-                arcname = f"{prefix}/{path.relative_to(task.project_root).as_posix()}"
+                arcname = path.relative_to(task.project_root).as_posix()
                 archive.write(path, arcname=arcname)
         return Response(
             content=buffer.getvalue(),
@@ -710,7 +718,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
                 )
                 options = RunOptions(
                     task_ref=entry["task_ref"],
-                    submission=Path(program["path"]),
+                    submission=directory / program["source"],
                     backend=settings.backend,
                     allow_draft=settings.allow_draft,
                     allow_unattested=settings.allow_unattested,
@@ -791,35 +799,40 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
 
         uploads = [item for item in submissions if item is not None and item.filename]
         if not uploads:
-            raise HTTPException(status_code=400, detail="请至少上传一个 .zip 程序")
+            raise HTTPException(
+                status_code=400, detail="请至少上传一个程序（.zip 或 .cpp/.h/.hpp 等源文件）"
+            )
         if len(uploads) > MAX_PROGRAMS:
             raise HTTPException(
                 status_code=400, detail=f"一次最多上传 {MAX_PROGRAMS} 个程序"
             )
+        for upload in uploads:
+            suffix = Path(upload.filename or "").suffix.lower()
+            if suffix not in PROGRAM_SUFFIXES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"不支持的批量程序格式：{suffix or '(无扩展名)'}；"
+                        "请上传 .zip 或 .cpp/.h/.hpp 等源文件"
+                    ),
+                )
 
         batch_id = new_batch_id()
         directory = _batch_dir(settings, batch_id)
-        programs: list[dict[str, str]] = []
-        for index, upload in enumerate(uploads, start=1):
-            name = Path(upload.filename or "").name
-            if Path(name).suffix.lower() != ".zip":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"批量测评目前只接受 .zip（每个 zip 是一个程序）：{name}",
-                )
-            try:
+        programs: list[dict[str, Any]] = []
+        try:
+            for index, upload in enumerate(uploads, start=1):
+                program_id = f"p{index}"
                 saved = _save_upload(
-                    upload, directory / "uploads", settings.max_upload_bytes
+                    upload,
+                    directory / "programs" / program_id / "incoming",
+                    settings.max_upload_bytes,
+                    allowed=PROGRAM_SUFFIXES,
                 )
-            except InvalidInputError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            programs.append(
-                {
-                    "program_id": f"p{index}",
-                    "filename": name,
-                    "path": str(saved),
-                }
-            )
+                programs.append(prepare_program(directory, program_id, saved))
+        except (InvalidInputError, OSError) as exc:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         batch = build_batch(
             batch_id=batch_id,

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import time
@@ -38,13 +39,16 @@ from ..config import (
 from ..domain.canonical import hash_json, utc_now
 from ..domain.enums import (
     BuildRole,
+    CasePurpose,
     CompileStatus,
     ComparisonStatus,
     DriverKind,
     ExecutionStatus,
+    ExpectedSourceKind,
     FaultOwner,
     Mode,
     ObserverKind,
+    Operator,
     OracleStatus,
     OverallStatus,
     ProtocolStatus,
@@ -69,6 +73,7 @@ from ..domain.models import (
     CompileResult,
     ContentRef,
     CoverageReport,
+    ExpectedSource,
     Observation,
     PlannedCase,
     ReportCounts,
@@ -84,7 +89,7 @@ from ..domain.models import (
 )
 from ..intake.snapshot import ingest
 from ..judge.aggregate import aggregate, count_results
-from ..judge.assertions import evaluate
+from ..judge.assertions import evaluate, strict_equal
 from ..judge.coverage import compute_coverage
 from ..sandbox.base import CompileOutcome, CompileRequest, RunOutcome, RunRequest
 from ..sandbox.gate import evaluate as evaluate_gate
@@ -182,6 +187,19 @@ def _read_text(path: Path, limit: int = 4 * 1024 * 1024) -> str:
     if not path.is_file():
         return ""
     data = path.read_bytes()[:limit]
+    return data.decode("utf-8", errors="replace")
+
+
+def _read_program_output(path: Path, limit: int = 4 * 1024 * 1024) -> str:
+    """读取被测程序输出：先按 UTF-8，再按 GBK（控制台程序常见两种编码）。"""
+    if not path.is_file():
+        return ""
+    data = path.read_bytes()[:limit]
+    for encoding in ("utf-8", "gbk"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
     return data.decode("utf-8", errors="replace")
 
 
@@ -321,6 +339,10 @@ class _StandardRun:
         self.raw_submission_id: str | None = None
         self.overridden: list[str] = []
         self.added: list[str] = []
+        # 单文件适配（观察型）：提交物与基准工程毫无交集时启用，见
+        # selfcheck/probes.py。None 表示走正常的“覆盖基准工程”路径。
+        self.legacy: Any = None
+        self.legacy_rel: str | None = None
 
     # -- 生命周期 -----------------------------------------------------------
     def execute(self) -> RunResult:
@@ -449,9 +471,8 @@ class _StandardRun:
         ]
         if not source_files:
             raise InvalidInputError(
-                "提交内容里没有源码/头文件（.cpp/.h）。请提交基于任务基准工程"
-                "（task_library/projects/contactbook_base/1.0.0）修改后的源码；"
-                "「参考基准程序/通讯录_v6最终版.cpp」只是出题背景，不是本任务的提交对象。"
+                "提交内容里没有源码/头文件（.cpp/.cc/.cxx/.h/.hpp）。请提交你修改后的"
+                "程序；单个完整的 .cpp 也可以直接放进测评（走“单文件适配（观察型）”）。"
             )
 
         overridden: list[str] = []
@@ -465,6 +486,13 @@ class _StandardRun:
             key = entry.path.casefold()
             target: Path | None = existing.get(key)
             matched_as = entry.path
+            if target is None and "/" in entry.path:
+                # 学生常把整个工程文件夹压缩上传（如 homework/validators.cpp），
+                # 先按“去掉第一层目录”的相对路径再匹配一次。
+                stripped = entry.path.split("/", 1)[1].casefold()
+                target = existing.get(stripped)
+                if target is not None:
+                    matched_as = target.relative_to(composed_dir).as_posix()
             if target is None:
                 candidates = by_name.get(Path(entry.path).name.casefold(), [])
                 if len(candidates) == 1:
@@ -484,12 +512,77 @@ class _StandardRun:
 
         matched_sources = [p for p in self.overridden if Path(p).suffix.lower() in _OVERLAY_SUFFIXES]
         if not matched_sources:
+            # 与基准工程没有任何交集：不再拒绝，退化为“单文件适配（观察型）”。
+            self._enter_legacy_mode(composed_dir, raw_root, source_files)
+
+    def _enter_legacy_mode(
+        self, composed_dir: Path, raw_root: Path, source_files: list[Any]
+    ) -> None:
+        """把提交物当作独立程序：保留全部源码，交给菜单探针观察。
+
+        这是“让完整程序也能被测评”的降级路径：不链接测试驱动、不跑任务的 JSON
+        用例，只执行 ``selfcheck/probes.py`` 里为该题准备的一条菜单脚本。多文件
+        程序（``main.cpp`` + 自己的 ``.h/.cpp`` 依赖）会一起参与编译。
+        """
+        from ..selfcheck.probes import probe_for
+
+        probe = probe_for(self.task.task_id)
+        keep = [
+            entry
+            for entry in source_files
+            if Path(entry.path).suffix.lower() in _OVERLAY_SUFFIXES
+        ]
+        has_cpp = any(
+            Path(entry.path).suffix.lower() in {".cpp", ".cc", ".cxx"} for entry in keep
+        )
+        if probe is None or not has_cpp:
             raise InvalidInputError(
-                "提交的源码没有匹配基准工程中的任何文件；请提交对 "
-                "task_library/projects/contactbook_base/1.0.0 的修改（保留相对路径，"
-                "如 validators.cpp / contactbook.cpp / contactbook.h）。"
-                "「参考基准程序/通讯录_v6最终版.cpp」是出题背景，不能被本任务直接测评。"
+                "单文件适配需要至少一个 .cpp 源文件，且当前任务已配置观察探针；"
+                f"任务 {self.task.task_id} 暂不支持直接测评独立程序，"
+                "请提交基于基准工程（task_library/projects/contactbook_base/1.0.0）的源码。"
             )
+
+        # 提交物常常整体套在一个顶层文件夹里；若所有文件共享同一个首层目录，
+        # 就把这一层剥掉，让程序在 composed_dir 根目录下按原相对路径摊开。
+        parts = [Path(entry.path).parts for entry in keep]
+        prefix = ""
+        if len(parts) > 1 and all(len(item) > 1 for item in parts):
+            first = {item[0] for item in parts}
+            if len(first) == 1:
+                prefix = first.pop()
+
+        if composed_dir.exists():
+            shutil.rmtree(composed_dir)
+        written: list[str] = []
+        main_rel = ""
+        main_size = -1
+        for entry in keep:
+            relative = Path(entry.path)
+            if prefix and relative.parts and relative.parts[0] == prefix:
+                relative = Path(*relative.parts[1:])
+            target = composed_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(raw_root / entry.path, target)
+            written.append(relative.as_posix())
+            if relative.suffix.lower() in {".cpp", ".cc", ".cxx"} and entry.size > main_size:
+                main_size = entry.size
+                main_rel = relative.as_posix()
+
+        self.legacy = probe
+        self.legacy_rel = main_rel
+        self.overridden = []
+        self.added = sorted(written)
+        self._event(
+            WorkflowState.INGESTING,
+            "LEGACY_SINGLE_FILE",
+            {
+                "task_id": self.task.task_id,
+                "probe": probe.check_id,
+                "source": main_rel,
+                "files": sorted(written),
+                "expectation": probe.expectation,
+            },
+        )
 
     # -- 阶段 2：任务解析（已在 load_task 完成，这里只记录） ------------------
     def _phase_resolve(self) -> None:
@@ -557,8 +650,9 @@ class _StandardRun:
             ),
             ValidationCheck(
                 check_id="harness_present",
-                description="测试驱动文件存在",
-                passed=any(unit.role is BuildRole.DRIVER for unit in build_plan.source_units),
+                description="测试驱动文件存在（单文件适配不链接测试驱动）",
+                passed=self.legacy is not None
+                or any(unit.role is BuildRole.DRIVER for unit in build_plan.source_units),
                 detail=None,
             ),
             ValidationCheck(
@@ -584,9 +678,14 @@ class _StandardRun:
             ),
             ValidationCheck(
                 check_id="submission_matched_project",
-                description="提交文件与基准工程匹配",
-                passed=bool(self.overridden or self.options.variant is not None),
-                detail="; ".join(self.overridden[:8]) or None,
+                description="提交文件与基准工程匹配（或按单文件适配受理）",
+                passed=self.legacy is not None
+                or bool(self.overridden or self.options.variant is not None),
+                detail=(
+                    f"单文件适配：{self.legacy_rel}"
+                    if self.legacy is not None
+                    else "; ".join(self.overridden[:8]) or None
+                ),
             ),
         ]
         record = ValidationRecord(
@@ -644,16 +743,36 @@ class _StandardRun:
         harness_dst.mkdir(parents=True)
 
         units: list[SourceUnit] = []
-        for index, path in enumerate(subject_source_units(self.task, build_src), start=1):
+        if self.legacy is not None:
+            # 单文件/多文件适配：提交物就是完整程序，所有 C++ 编译单元一起编译。
+            legacy_units = sorted(
+                path
+                for path in build_src.rglob("*")
+                if path.is_file() and path.suffix.lower() in {".cpp", ".cc", ".cxx"}
+            )
+        else:
+            legacy_units = []
+        if legacy_units:
+            subject_units = [
+                (f"src{index:02d}", path) for index, path in enumerate(legacy_units, start=1)
+            ]
+        else:
+            subject_units = [
+                (f"src{index:02d}", path)
+                for index, path in enumerate(
+                    subject_source_units(self.task, build_src), start=1
+                )
+            ]
+        for unit_id, path in subject_units:
             units.append(
                 SourceUnit(
-                    unit_id=f"src{index:02d}",
+                    unit_id=unit_id,
                     origin=SourceOrigin.SUBMISSION,
                     role=BuildRole.ORIGINAL,
                     path=f"generated/subject/{path.relative_to(build_src).as_posix()}",
                 )
             )
-        for path in self.task.harness_files:
+        for path in self.task.harness_files if self.legacy is None else []:
             shutil.copyfile(path, harness_dst / path.name)
             if path.suffix.lower() == ".cpp":
                 units.append(
@@ -672,7 +791,11 @@ class _StandardRun:
             subject_snapshot_hash=self.manifest.snapshot_hash,
             toolchain_id=toolchain_id(),
             source_units=units,
-            include_dirs=["generated/subject", "generated/harness"],
+            include_dirs=(
+                ["generated/subject", "generated/harness"]
+                if self.legacy is None
+                else ["generated/subject"]
+            ),
             defines=[],
             libraries=[],
             entrypoint=None,
@@ -688,20 +811,36 @@ class _StandardRun:
     def _build_test_plan(self, build_plan: BuildPlan) -> TestPlan:
         assert self.manifest is not None
         template = self.task.template
+        spec = self.task.task_spec
+        operation_id = template.operation_id
         cases: list[PlannedCase] = []
-        for case_id in self.task.task_spec.case_ids:
-            case = self.task.cases[case_id]
+        if self.legacy is not None:
+            # 单文件适配只有一个“观察用例”：菜单脚本 + 一条事实断言。
+            probe = self.legacy
+            operation_id = "legacy_probe"
             cases.append(
                 PlannedCase(
                     schema_version=SCHEMA_VERSION,
-                    case_id=case_id,
-                    operation_id=template.operation_id,
-                    input_hash=hash_json(case.input),
-                    assertion_ids=case.assertion_ids,
-                    limits=effective_limits(self.task.document.limits, case.limits_override),
+                    case_id=probe.case_id,
+                    operation_id=operation_id,
+                    input_hash=hash_json({"script": list(probe.resolved_script())}),
+                    assertion_ids=[probe.assertion_id],
+                    limits=effective_limits(self.task.document.limits, None),
                 )
             )
-        spec = self.task.task_spec
+        else:
+            for case_id in spec.case_ids:
+                case = self.task.cases[case_id]
+                cases.append(
+                    PlannedCase(
+                        schema_version=SCHEMA_VERSION,
+                        case_id=case_id,
+                        operation_id=operation_id,
+                        input_hash=hash_json(case.input),
+                        assertion_ids=case.assertion_ids,
+                        limits=effective_limits(self.task.document.limits, case.limits_override),
+                    )
+                )
         plan = TestPlan(
             schema_version=SCHEMA_VERSION,
             plan_id=f"plan_{self.run_id}",
@@ -713,7 +852,7 @@ class _StandardRun:
             template_ref=spec.io_template_ref,
             verifier_ref=spec.reference_verifier_ref,
             subject_snapshot_hash=self.manifest.snapshot_hash,
-            operation_id=template.operation_id,
+            operation_id=operation_id,
             driver_kind=DriverKind.STDIN_SCRIPT,
             observer_kind=ObserverKind.TRUSTED_EXTRACTOR,
             cases=cases,
@@ -725,6 +864,10 @@ class _StandardRun:
         )
 
     def _cases_confirmed(self) -> bool:
+        # 单文件适配不执行任务用例，只执行一条已固定期望值的探针；不因任务的
+        # oracle 状态把结论拖成 INCONCLUSIVE。
+        if self.legacy is not None:
+            return True
         return all(
             self.task.cases[case_id].oracle_status is OracleStatus.CONFIRMED
             for case_id in self.task.task_spec.case_ids
@@ -736,16 +879,17 @@ class _StandardRun:
         assert self.plan is not None and self.build_plan is not None
         self._save_json("plans", "test_plan.json", self.plan.model_dump(mode="json"))
         self._save_json("plans", "build_plan.json", self.build_plan.model_dump(mode="json"))
-        for case_id in self.task.task_spec.case_ids:
-            case = self.task.cases[case_id]
-            request = build_request(
-                run_id=self.run_id,
-                attempt_id=self._attempt_id(case_id),
-                case_id=case_id,
-                operation_id=self.task.template.operation_id,
-                case_input=case.input,
-            )
-            self._save_json("plans/requests", f"{case_id}.json", request)
+        if self.legacy is None:
+            for case_id in self.task.task_spec.case_ids:
+                case = self.task.cases[case_id]
+                request = build_request(
+                    run_id=self.run_id,
+                    attempt_id=self._attempt_id(case_id),
+                    case_id=case_id,
+                    operation_id=self.task.template.operation_id,
+                    case_input=case.input,
+                )
+                self._save_json("plans/requests", f"{case_id}.json", request)
         self._event(
             WorkflowState.FROZEN,
             "PLAN_FROZEN",
@@ -775,6 +919,9 @@ class _StandardRun:
             return
 
         exe = self.run_dir / "generated" / "build" / self.build_plan.artifact_name
+        if self.legacy is not None:
+            self._run_legacy_case(exe)
+            return
         deadline = time.monotonic() + self.task.document.limits.total_wall_ms / 1000.0
         for case_id in self.task.task_spec.case_ids:
             self._check_cancel()
@@ -950,6 +1097,114 @@ class _StandardRun:
             },
         )
 
+    def _run_legacy_case(self, exe: Path) -> None:
+        """执行单文件探针：喂菜单脚本、从 stdout 提取一条可核对事实。"""
+        assert self.plan is not None and self.legacy is not None
+        probe = self.legacy
+        case_id = probe.case_id
+        limits = effective_limits(self.task.document.limits, None)
+        case_dir = self.run_dir / "evidence" / "cases" / case_id
+        work_dir = case_dir / "work"
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        work_dir.mkdir(parents=True)
+
+        stdin_path = case_dir / "stdin.txt"
+        stdout_path = case_dir / "stdout.txt"
+        stderr_path = case_dir / "stderr.txt"
+        stdin_path.write_text(
+            "\n".join(probe.resolved_script()) + "\n", encoding="utf-8", newline="\n"
+        )
+        attempt_id = self._attempt_id(case_id)
+
+        if self.backend.simulated:
+            facts: dict[str, Any] = dict(probe.expected)
+            facts.update(dict(probe.guard))
+            termination = Termination.EXITED
+            exit_code = 0
+            wall_ms = 0
+            events = ["模拟执行：未启动任何进程，观察事实由探针期望合成"]
+            stdout_path.write_text(
+                '{"note":"mock backend: no code executed"}\n', encoding="utf-8"
+            )
+            stderr_path.write_text("", encoding="utf-8")
+            protocol_detail = "模拟后端：未执行被测代码"
+        else:
+            self._check_cancel()
+            outcome: RunOutcome = self.backend.run(
+                RunRequest(
+                    executable=exe,
+                    argv=[],
+                    stdin_path=stdin_path,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    work_dir=work_dir,
+                    limits=limits,
+                    env=minimal_environment(work_dir),
+                )
+            )
+            termination = outcome.termination
+            exit_code = outcome.exit_code
+            wall_ms = outcome.wall_ms
+            events = list(outcome.resource_events)
+            stdout_text = _read_program_output(
+                stdout_path, min(limits.output_bytes + 65536, 4 * 1024 * 1024)
+            )
+            stderr_text = _read_program_output(
+                stderr_path, min(limits.output_bytes + 65536, 4 * 1024 * 1024)
+            )
+            facts = probe.inspect(stdout_text, stderr_text)
+            protocol_detail = (
+                "单文件适配（观察型）：用固定菜单脚本驱动程序并从 stdout 提取事实；"
+                "不链接测试驱动，也不执行任务包里声明的 JSON 用例"
+            )
+
+        facts["termination"] = termination.value
+        observation = Observation(
+            schema_version=SCHEMA_VERSION,
+            observation_id=f"obs_{self.run_id}_{case_id}",
+            run_id=self.run_id,
+            phase=WorkflowState.EXECUTING.value,
+            execution_manifest_hash=self.manifest.snapshot_hash if self.manifest else "0" * 64,
+            plan_hash=self.plan.plan_hash,
+            case_id=case_id,
+            attempt_id=attempt_id,
+            termination=termination,
+            exit_code=exit_code,
+            stdout_ref=f"evidence/cases/{case_id}/stdout.txt",
+            stderr_ref=f"evidence/cases/{case_id}/stderr.txt",
+            files_refs=[],
+            wall_ms=wall_ms,
+            resource_events=events,
+            protocol_status=ProtocolStatus.OK,
+            actual=facts,
+            fault_owner=FaultOwner.NONE,
+            protocol_detail=protocol_detail,
+        )
+        self.observations[case_id] = observation
+        self._save_json(
+            "evidence/cases", f"{case_id}/observation.json", observation.model_dump(mode="json")
+        )
+        self.evidence_refs.extend(
+            [
+                f"evidence/cases/{case_id}/stdin.txt",
+                observation.stdout_ref or "",
+                observation.stderr_ref or "",
+            ]
+        )
+        self._event(
+            WorkflowState.EXECUTING,
+            "CASE_FINISHED",
+            {
+                "case_id": case_id,
+                "termination": termination.value,
+                "exit_code": exit_code,
+                "protocol_status": ProtocolStatus.OK.value,
+                "wall_ms": wall_ms,
+                "legacy_probe": probe.check_id,
+            },
+        )
+
     # -- 阶段 6：报告 -------------------------------------------------------
     def _phase_report(self) -> None:
         self.finished_at = self.finished_at or utc_now()
@@ -957,7 +1212,11 @@ class _StandardRun:
         try:
             case_results = self._build_case_results()
             self.case_results = case_results
-            coverage = compute_coverage(self.task.method, self.task.cases, case_results)
+            coverage = (
+                self._legacy_coverage(case_results)
+                if self.legacy is not None
+                else compute_coverage(self.task.method, self.task.cases, case_results)
+            )
             counts = count_results(case_results, coverage)
             report = self._assemble_report(coverage, counts, case_results)
             self.report = report
@@ -1010,17 +1269,25 @@ class _StandardRun:
         if self.validation is not None:
             evidence.append("plans/validation.json")
         evidence = list(dict.fromkeys(evidence))
-        note = None
+        notes: list[str] = []
         if getattr(self.backend, "simulated", False):
-            note = (
+            notes.append(
                 "本次执行使用模拟后端（execution_backend=mock），未运行任何被测代码；"
                 "观测由用例期望合成，仅用于验证状态机与报告链路，不得计入验收。"
             )
         elif not self.attested:
-            note = (
+            notes.append(
                 "执行后端未通过隔离能力门禁（缺网络/文件系统隔离等），"
                 "报告如实标注 grade_eligible=false；能力补齐后可重新测评。"
             )
+        if self.legacy is not None:
+            notes.append(
+                "单文件适配（观察型）：提交物与基准工程无交集，只编译该 .cpp，"
+                f"并用固定菜单脚本观察「{self.legacy.title}」（规则 "
+                f"{'、'.join(self.legacy.rule_ids)}）；任务包声明的 "
+                f"{len(self.task.task_spec.case_ids)} 个断言用例未执行，结论不是完整评分。"
+            )
+        note = " ".join(notes) or None
         return AssessmentReport(
             schema_version=SCHEMA_VERSION,
             run_id=self.run_id,
@@ -1051,6 +1318,8 @@ class _StandardRun:
         )
 
     def _build_case_results(self) -> list[CaseResult]:
+        if self.legacy is not None:
+            return self._build_legacy_case_results()
         results: list[CaseResult] = []
         for case_id in self.task.task_spec.case_ids:
             case = self.task.cases[case_id]
@@ -1074,6 +1343,126 @@ class _StandardRun:
                 continue
             results.append(self._judge_case(case, observation))
         return results
+
+    def _build_legacy_case_results(self) -> list[CaseResult]:
+        """把一条菜单观察变成 CaseResult：事实齐全才比较，观察不到就不下结论。"""
+        assert self.legacy is not None
+        probe = self.legacy
+        case_id = probe.case_id
+        observation = self.observations.get(case_id)
+        if observation is None:
+            return [
+                CaseResult(
+                    schema_version=SCHEMA_VERSION,
+                    case_id=case_id,
+                    attempt_id=self._attempt_id(case_id),
+                    purpose=CasePurpose.ASSESSMENT,
+                    comparison=ComparisonStatus.NOT_COMPARED,
+                    termination=Termination.NOT_RUN,
+                    protocol_status=ProtocolStatus.NOT_APPLICABLE,
+                    assertion_results=[],
+                    failed_assertions=[],
+                    evidence_refs=[],
+                    note="NOT_RUN",
+                )
+            ]
+
+        evidence = [
+            ref
+            for ref in [
+                f"evidence/cases/{case_id}/observation.json",
+                observation.stdout_ref or "",
+                observation.stderr_ref or "",
+            ]
+            if ref
+        ]
+        facts = observation.actual or {}
+        expected = dict(probe.expected)
+        actual = {key: facts.get(key) for key in expected}
+        unobservable = [
+            key for key, value in probe.guard.items() if not strict_equal(facts.get(key), value)
+        ]
+        assertion_id = probe.assertion_id
+        if unobservable:
+            comparison = ComparisonStatus.NOT_COMPARED
+            detail = (
+                "本次运行没有观察到可核对的事实（"
+                + "、".join(unobservable)
+                + "）；可能是脚本与程序菜单不匹配，或程序没有正常退出"
+            )
+            note = "OBSERVATION_INCOMPLETE"
+        else:
+            matched = all(strict_equal(actual.get(key), expected[key]) for key in expected)
+            comparison = ComparisonStatus.MATCH if matched else ComparisonStatus.MISMATCH
+            detail = (
+                "观察值为 "
+                + json.dumps(actual, ensure_ascii=False, sort_keys=True)
+                + "；规则期望 "
+                + json.dumps(expected, ensure_ascii=False, sort_keys=True)
+            )
+            note = None
+        assertion = AssertionResult(
+            schema_version=SCHEMA_VERSION,
+            assertion_id=assertion_id,
+            case_id=case_id,
+            operator=Operator.EQUALS,
+            comparison=comparison,
+            expected_source=ExpectedSource(
+                kind=ExpectedSourceKind.CASE_EXPECTED,
+                pointer=f"/{next(iter(expected))}" if expected else "/",
+            ),
+            expected=expected,
+            actual=actual,
+            detail=detail,
+            evidence_ref=f"evidence/cases/{case_id}/observation.json",
+        )
+        return [
+            CaseResult(
+                schema_version=SCHEMA_VERSION,
+                case_id=case_id,
+                attempt_id=observation.attempt_id,
+                purpose=CasePurpose.ASSESSMENT,
+                comparison=comparison,
+                termination=observation.termination,
+                protocol_status=observation.protocol_status,
+                assertion_results=[assertion],
+                failed_assertions=(
+                    [assertion_id] if comparison is ComparisonStatus.MISMATCH else []
+                ),
+                evidence_refs=evidence,
+                observation_id=observation.observation_id,
+                note=note,
+            )
+        ]
+
+    def _legacy_coverage(self, case_results: list[CaseResult]) -> CoverageReport:
+        """单文件适配只计划一条探针用例，覆盖统计也只围绕它计算。"""
+        assert self.legacy is not None
+        case_id = self.legacy.case_id
+        assertion_id = self.legacy.assertion_id
+        completed = [result for result in case_results if result.note != "NOT_RUN"]
+        completed_ids = [result.case_id for result in completed]
+        executed_assertions = [
+            assertion.assertion_id
+            for result in completed
+            for assertion in result.assertion_results
+        ]
+        missed_cases = [case_id] if case_id not in completed_ids else []
+        missing_assertions = [assertion_id] if assertion_id not in executed_assertions else []
+        return CoverageReport(
+            planned_cases=[case_id],
+            completed_cases=completed_ids,
+            missed_cases=missed_cases,
+            planned_partitions=[],
+            covered_partitions=[],
+            missing_partitions=[],
+            planned_assertions=[assertion_id],
+            executed_assertions=[
+                item for item in [assertion_id] if item in executed_assertions
+            ],
+            missing_assertions=missing_assertions,
+            complete=not missed_cases and not missing_assertions,
+        )
 
     def _judge_case(self, case: TaskCase, observation: Observation) -> CaseResult:
         evidence = [

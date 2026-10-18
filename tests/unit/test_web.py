@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import time
 import zipfile
@@ -162,12 +163,13 @@ def test_queued_run_page_is_not_404(client: TestClient) -> None:
     assert "任务已排队" in response.text
 
 
-def test_invalid_submission_renders_report_instead_of_crashing(
-    client: TestClient, tmp_path: Path
+def test_unmatched_single_file_falls_back_to_observation_instead_of_rejecting(
+    local_client: TestClient, tmp_path: Path
 ) -> None:
+    """单文件与基准工程无交集时不再拒绝，而是进入观察型适配。"""
     submission = tmp_path / "unrelated.cpp"
     submission.write_text("int main() { return 0; }\n", encoding="utf-8", newline="\n")
-    response = client.post(
+    response = local_client.post(
         "/runs",
         data={"task_ref": TASK_REF},
         files={"submission": ("unrelated.cpp", submission.read_bytes())},
@@ -176,15 +178,16 @@ def test_invalid_submission_renders_report_instead_of_crashing(
     assert response.status_code == 303, response.text
     run_id = response.headers["location"].rsplit("/", 1)[-1]
 
-    status = _wait_for_run(client, run_id)
+    status = _wait_for_run(local_client, run_id)
     assert status["state"] == "done"
-    assert status["execution_status"] == "INVALID_INPUT"
-    assert status["assessment_status"] == "NOT_ASSESSED"
+    assert status["execution_status"] == "COMPLETED"
+    # 程序能编译运行，但输出里没有可核对的事实：不能判对错，只能 INCONCLUSIVE。
+    assert status["assessment_status"] == "INCONCLUSIVE"
 
-    page = client.get(f"/runs/{run_id}")
+    page = local_client.get(f"/runs/{run_id}")
     assert page.status_code == 200
-    assert "INVALID_INPUT" in page.text
-    assert "参考基准程序" in page.text
+    assert "single_file" in page.text
+    assert "单文件适配" in page.text
 
 
 def test_run_id_with_dotdot_is_rejected(client: TestClient) -> None:
@@ -194,7 +197,7 @@ def test_run_id_with_dotdot_is_rejected(client: TestClient) -> None:
 def test_base_project_download_and_submission_guidance(client: TestClient) -> None:
     page = client.get(f"/tasks/{TASK_REF}")
     assert "/base.zip" in page.text
-    assert "不能直接提交" in page.text
+    assert "单文件适配（观察型）" in page.text
 
     archive = client.get(f"/tasks/{TASK_REF}/base.zip")
     assert archive.status_code == 200
@@ -259,11 +262,72 @@ def test_batch_runs_programs_times_tasks(client: TestClient, tmp_path: Path) -> 
     assert batch_id in listing.text
 
 
-def test_batch_rejects_non_zip(client: TestClient) -> None:
+def test_batch_accepts_zip_and_single_file_programs(client: TestClient, tmp_path: Path) -> None:
+    """批量不再只收 zip：一个程序可以是压缩包（多文件带依赖），也可以是单个源码文件。
+
+    每个程序落成独立文件夹：source/ 放被测代码、verifier/ 留给该程序专属判定代码。
+    """
+    archive = tmp_path / "nested.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
+        handle.writestr("src/main.cpp", "int main(){return 0;}\n")
+        handle.writestr("src/util.h", "#pragma once\n")
+    single = tmp_path / "standalone.cpp"
+    single.write_text("int main(){return 0;}\n", encoding="utf-8", newline="\n")
+
     response = client.post(
         "/batch",
         data={"tasks": [TASK_REF]},
-        files={"submissions": ("p1.cpp", b"int main(){return 0;}\n", "text/plain")},
+        files=[
+            ("submissions", (archive.name, archive.read_bytes(), "application/zip")),
+            ("submissions", (single.name, single.read_bytes(), "text/plain")),
+        ],
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    batch_id = response.headers["location"].rsplit("/", 1)[-1]
+
+    status = _wait_for_batch(client, batch_id)
+    assert status["status"] == "completed"
+    assert status["progress"]["total"] == 2
+    assert status["progress"]["done"] == 2
+    assert status["progress"]["errors"] == 0
+
+    root = tmp_path / "data" / "batches" / batch_id
+    assert (root / "programs" / "p1" / "source" / "src" / "main.cpp").is_file()
+    assert (root / "programs" / "p1" / "source" / "src" / "util.h").is_file()
+    assert (root / "programs" / "p1" / "original.zip").is_file()
+    assert (root / "programs" / "p2" / "source" / "standalone.cpp").is_file()
+    for program_id in ("p1", "p2"):
+        assert (root / "programs" / program_id / "verifier").is_dir()
+        assert (root / "programs" / program_id / "program.json").is_file()
+    assert not (root / "programs" / "p1" / "incoming").exists()
+
+    batch = json.loads((root / "batch.json").read_text(encoding="utf-8"))
+    assert [item["source"] for item in batch["programs"]] == [
+        "programs/p1/source",
+        "programs/p2/source",
+    ]
+    assert [item["kind"] for item in batch["programs"]] == ["archive", "source"]
+
+    page = client.get(f"/batch/{batch_id}")
+    assert page.status_code == 200
+    assert "nested.zip" in page.text
+    assert "standalone.cpp" in page.text
+
+    # 单文件程序走观察型适配：报告里出现 single_file 用例。
+    single_entry = next(
+        entry for entry in batch["entries"] if entry["program_id"] == "p2"
+    )
+    run_page = client.get(f"/runs/{single_entry['run_id']}")
+    assert run_page.status_code == 200
+    assert "single_file" in run_page.text
+
+
+def test_batch_rejects_unsupported_file(client: TestClient) -> None:
+    response = client.post(
+        "/batch",
+        data={"tasks": [TASK_REF]},
+        files={"submissions": ("notes.txt", b"hello\n", "text/plain")},
         follow_redirects=False,
     )
     assert response.status_code == 400
