@@ -441,6 +441,7 @@ class ModeTwoRun:
                 "function_driver": "driver_source 必须能读 stdin 的请求 JSON，最后一行输出 {\"protocol_version\":\"1.0\",\"status\":\"OK\",\"actual\":{...}}",
                 "extractor_params": "observer.params 也用同一套占位符；提取器只输出事实，不做比较",
                 "observation_first": "剧本必须走到能读出事实的界面（列表/搜索/提醒/统计），只看到“添加成功”这类提示不算观测；菜单程序添加后通常要先回上一层再进查找界面",
+                "stdin_values_only": "剧本里只放输入值，不要复制程序打印的提示语（以 * 开头或以 ：结尾的字符串），否则静态校验会拒绝",
                 "startup_capacity": "程序启动时若先问容量/最大条数，给一个明显大于种子数据的常数（例如 200）；容量不足会导致添加被拒，别按当前联系人数猜",
                 "subject_level": "task.subject_level 描述基准工程的接口层级，不约束目标程序；目标是菜单程序时选择 stdin_script，不要因为 subject_level=FUNCTION 就返回 UNSUPPORTED",
                 "unsupported": "只有在目标程序没有任何可确定复现的 stdin 路径时才返回 status=UNSUPPORTED",
@@ -639,11 +640,15 @@ class ModeTwoRun:
         if missing:
             return [f"提取器没有产出断言需要的字段：{missing}"]
         if bundle.observer.extractor_id == "contactbook_menu_v1" and not facts.get("observed_rows"):
+            script = bundle.driver.session_by_case.get(case_id) or list(bundle.driver.session)
+            tail = stdout[-500:].replace("\r", "")
             return [
                 "剧本没有走到能读出事实的界面：输出里没有任何列表行或搜索行，"
-                "只看到“添加成功”不算观测。请补上读事实的步骤（例如：添加后先输入 0 回主菜单，"
-                "再进入查找 1 → 搜索 9 → 按名字 1 → 输入姓名，看到 “i.[类型] 姓名 电话” 之后才退出），"
-                "并用 driver.session_by_case 为分支不同的用例分别给出剧本。"
+                "只看到“添加成功”不算观测。注意菜单语义：添加成功后回到“添加联系人”子菜单，"
+                "输入 0 才回主菜单；到主菜单后再输入 0 就是退出程序。"
+                "正确顺序：添加 → 0（回主菜单）→ 1（查找）→ 9（搜索）→ 1（按名字）→ 姓名 → 0 → 0（退出）。"
+                f"当前剧本：{json.dumps(script, ensure_ascii=False)}；"
+                f"实际输出末尾：{json.dumps(tail, ensure_ascii=False)}"
             ]
         return []
 

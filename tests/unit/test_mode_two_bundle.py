@@ -134,6 +134,15 @@ def test_enum_values_are_case_insensitive() -> None:
     assert result.problems == []
 
 
+def test_prompt_text_in_session_is_rejected() -> None:
+    payload = base_bundle()
+    payload["driver"]["session_by_case"] = {
+        "c_non_digit_11": ["1", "不合法的电话号码，请重新输入：", "13800138000"]
+    }
+    result = validate(payload)
+    assert any("提示语" in problem for problem in result.problems)
+
+
 def test_expected_values_are_rejected() -> None:
     payload = base_bundle()
     payload["observer"]["params"]["expected"] = "PASS"

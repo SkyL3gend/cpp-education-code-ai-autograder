@@ -313,9 +313,24 @@ def validate_bundle(
 
     # 驱动
     known_inputs = schema_paths(task.template.input_schema)
+
+    def _check_script_lines(script: list[str], where: str) -> None:
+        for index, step in enumerate(script):
+            text = str(step).strip()
+            if not text:
+                continue
+            looks_like_prompt = text.startswith("*") or "请输入" in text or "Make your choice" in text
+            looks_like_prompt = looks_like_prompt or text.endswith("：") or text.endswith(":")
+            if looks_like_prompt:
+                result.problems.append(
+                    f"剧本第 {index + 1} 行像是程序打印的提示语而不是输入：{text[:40]}（{where}）；"
+                    "剧本只放要输入的值，不要复制程序输出"
+                )
+
     if bundle.driver.kind == "stdin_script":
         if not bundle.driver.session and not bundle.driver.session_by_case:
             result.problems.append("stdin_script 驱动必须给出非空的 session 剧本")
+        _check_script_lines(bundle.driver.session, "session")
         for step in bundle.driver.session:
             for placeholder in _placeholders(step):
                 if placeholder not in known_inputs:
@@ -326,6 +341,7 @@ def validate_bundle(
                 result.problems.append(f"session_by_case 里的用例不存在：{case_id}")
             if not script:
                 result.problems.append(f"session_by_case[{case_id}] 是空剧本")
+            _check_script_lines(script, case_id)
             for step in script:
                 for placeholder in _placeholders(step):
                     if placeholder not in known_inputs:
