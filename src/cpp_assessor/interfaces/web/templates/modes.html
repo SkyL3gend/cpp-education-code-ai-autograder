@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ t('modes.title') }}{% endblock %}
+{% block content %}
+
+<section class="hero">
+  <h1>{{ t('modes.heading') }}</h1>
+  <p>{{ t('modes.intro') }}</p>
+</section>
+
+<section class="mode-grid">
+  <a class="mode-card" href="/standard">
+    <div class="mode-head">
+      <span class="mode-icon">A</span>
+      <span class="badge published">{{ t('nav.tasks') }}</span>
+    </div>
+    <h2>{{ t('modes.standard.title') }} <small class="muted">{{ t('modes.standard.sub') }}</small></h2>
+    <p>{{ t('modes.standard.desc') }}</p>
+    <span class="button primary">{{ t('modes.standard.enter') }}</span>
+  </a>
+
+  <div class="mode-card disabled" aria-disabled="true">
+    <div class="mode-head">
+      <span class="mode-icon">B</span>
+      <span class="badge draft">{{ t('modes.llm.soon') }}</span>
+    </div>
+    <h2>{{ t('modes.llm.title') }} <small class="muted">{{ t('modes.llm.sub') }}</small></h2>
+    <p>{{ t('modes.llm.desc') }}</p>
+    <button class="button" type="button" disabled title="{{ t('modes.llm.disabled') }}">{{ t('modes.llm.disabled') }}</button>
+  </div>
+</section>
+
+<p class="muted small mode-note">{{ t('modes.note') }}</p>
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ t('index.backend.title') }}</h2>
+    <span class="mono small">{{ capabilities.backend_id }}</span>
+  </div>
+  <table class="kv">
+    <tr><th>{{ t('index.backend.isolation') }}</th><td>{{ capabilities.isolation }}</td></tr>
+    <tr><th>{{ t('index.backend.limits') }}</th>
+      <td>{{ '✓' if capabilities.cpu_limit else '✗' }} / {{ '✓' if capabilities.memory_limit else '✗' }} / {{ '✓' if capabilities.process_limit else '✗' }}</td></tr>
+    <tr><th>{{ t('index.backend.wall') }}</th>
+      <td>{{ '✓' if capabilities.wall_timeout else '✗' }} / {{ '✓' if capabilities.tree_kill else '✗' }}</td></tr>
+    <tr><th>{{ t('index.backend.netfs') }}</th>
+      <td>{{ '✓' if capabilities.network_block else '✗' }} / {{ '✓' if capabilities.filesystem_isolation else '✗' }}</td></tr>
+  </table>
+</section>
+
+{% endblock %}

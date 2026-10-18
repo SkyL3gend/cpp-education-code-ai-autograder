@@ -1,27 +1,21 @@
 {% extends "base.html" %}
-{% block title %}题库{% endblock %}
+{% block title %}{{ t('nav.tasks') }}{% endblock %}
 {% block content %}
 
 {% if settings.backend == 'mock' %}
 <div class="banner warn">
-  <strong>模拟后端已启用</strong>：不会编译或执行任何代码，仅用于演示状态机与报告链路，
-  所有结果明确标注 <code>execution_backend=mock</code>，不得计入真实成绩。
+  <strong>{{ t('index.banner.mock') }}</strong>
 </div>
 {% elif not settings.allow_unattested %}
 <div class="banner warn">
-  <strong>执行后端未通过能力门禁</strong>：本机 Job Object 缺少网络与文件系统隔离，
-  提交会得到 <code>NOT_ASSESSED</code>。若只是演示，请用
-  <code>assessor web --allow-unattested-backend</code> 启动（报告会标注
-  <code>grade_eligible=false</code>）。
+  <strong>{{ t('index.banner.gate') }}</strong>
 </div>
 {% endif %}
 
 <section class="hero">
-  <h1>选择一个代码小改任务</h1>
-  <p>
-    每题包含功能要求、参照正确实现、已知缺陷实现与 4—6 个覆盖正常与边界的用例。
-    提交后由预配置用例判定对错，页面只展示客观结果与证据，不展示预期值。
-  </p>
+  <h1>{{ t('index.hero.title') }}</h1>
+  <p>{{ t('index.hero.text') }}</p>
+  <p class="small"><a class="link" href="/batch">{{ t('index.batch_link') }}</a></p>
 </section>
 
 <section class="grid tasks">
@@ -30,30 +24,30 @@
     <div class="card-head">
       <span class="mono small">{{ task.task_id }}@{{ task.version }}</span>
       <span class="badge {{ 'published' if task.get('publication_status') == 'PUBLISHED' else 'draft' }}">
-        {{ task.get('publication_status', task.get('status', 'BROKEN')) }}
+        {{ label('publication', task.get('publication_status', task.get('status', 'UNKNOWN'))) }}
       </span>
     </div>
     <h2>{{ task.get('title', task.task_id) }}</h2>
-    <p class="muted">用例数：{{ task.get('case_count', '-') }}</p>
-    <a class="button" href="/tasks/{{ task.task_id }}@{{ task.version }}">查看任务与提交</a>
+    <p class="muted">{{ t('index.case_count') }}: {{ task.get('case_count', '-') }}</p>
+    <a class="button" href="/tasks/{{ task.task_id }}@{{ task.version }}">{{ t('index.open') }}</a>
   </article>
   {% else %}
-  <p class="muted">题库为空：请检查 task_library/tasks 目录。</p>
+  <p class="muted">{{ t('index.empty') }}</p>
   {% endfor %}
 </section>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>执行后端</h2>
+    <h2>{{ t('index.backend.title') }}</h2>
     <span class="mono small">{{ capabilities.backend_id }}</span>
   </div>
   <table class="kv">
-    <tr><th>隔离级别</th><td>{{ capabilities.isolation }}</td></tr>
-    <tr><th>CPU / 内存 / 进程数限制</th>
+    <tr><th>{{ t('index.backend.isolation') }}</th><td>{{ capabilities.isolation }}</td></tr>
+    <tr><th>{{ t('index.backend.limits') }}</th>
       <td>{{ '✓' if capabilities.cpu_limit else '✗' }} / {{ '✓' if capabilities.memory_limit else '✗' }} / {{ '✓' if capabilities.process_limit else '✗' }}</td></tr>
-    <tr><th>墙钟超时 / 进程树终止</th>
+    <tr><th>{{ t('index.backend.wall') }}</th>
       <td>{{ '✓' if capabilities.wall_timeout else '✗' }} / {{ '✓' if capabilities.tree_kill else '✗' }}</td></tr>
-    <tr><th>网络隔离 / 文件系统隔离</th>
+    <tr><th>{{ t('index.backend.netfs') }}</th>
       <td>{{ '✓' if capabilities.network_block else '✗' }} / {{ '✓' if capabilities.filesystem_isolation else '✗' }}</td></tr>
   </table>
   {% if capabilities.notes %}
@@ -65,13 +59,13 @@
 
 <section class="panel">
   <div class="panel-head">
-    <h2>最近运行</h2>
-    <a class="link" href="/runs">全部记录 →</a>
+    <h2>{{ t('index.recent.title') }}</h2>
+    <a class="link" href="/runs">{{ t('index.recent.all') }}</a>
   </div>
   {% if recent %}
   <table class="table">
     <thead>
-      <tr><th>run_id</th><th>任务</th><th>工作流</th><th>结论</th><th>时间</th></tr>
+      <tr><th>{{ t('table.run_id') }}</th><th>{{ t('table.task') }}</th><th>{{ t('table.workflow') }}</th><th>{{ t('table.status') }}</th><th>{{ t('table.time') }}</th></tr>
     </thead>
     <tbody>
       {% for run in recent %}
@@ -81,7 +75,7 @@
         <td>{{ run.workflow_state }}</td>
         <td>
           {% if run.assessment_status %}
-          <span class="badge {{ run.assessment_status|lower }}">{{ run.assessment_status }}</span>
+          <span class="badge {{ run.assessment_status|lower }}">{{ label('assessment', run.assessment_status) }}</span>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
         <td class="mono small">{{ run.created_at }}</td>
@@ -90,7 +84,7 @@
     </tbody>
   </table>
   {% else %}
-  <p class="muted">还没有运行记录。</p>
+  <p class="muted">{{ t('index.recent.empty') }}</p>
   {% endif %}
 </section>
 

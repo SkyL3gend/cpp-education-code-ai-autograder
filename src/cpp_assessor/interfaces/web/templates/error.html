@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}出错了{% endblock %}
+{% block title %}{{ t('error.title') }}{% endblock %}
 {% block content %}
 <section class="hero">
-  <h1>请求无法完成</h1>
+  <h1>{{ t('error.title') }}</h1>
   <p>{{ message }}</p>
-  <p><a class="button" href="/">返回题库</a></p>
+  <p><a class="button" href="/">{{ t('error.back') }}</a></p>
 </section>
 {% endblock %}

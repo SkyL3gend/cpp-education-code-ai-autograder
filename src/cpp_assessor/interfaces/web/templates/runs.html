@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}运行记录{% endblock %}
+{% block title %}{{ t('runs.title') }}{% endblock %}
 {% block content %}
 
 <section class="hero">
-  <h1>运行记录</h1>
-  <p>所有运行都保存在 <code>data/runs/&lt;run_id&gt;/</code>，包含报告、观测、编译日志与证据。</p>
+  <h1>{{ t('runs.title') }}</h1>
+  <p>{{ t('runs.desc') }}</p>
 </section>
 
 <section class="panel">
@@ -12,8 +12,8 @@
   <table class="table">
     <thead>
       <tr>
-        <th>run_id</th><th>任务</th><th>工作流</th><th>执行状态</th>
-        <th>结论</th><th>后端</th><th>时间</th>
+        <th>{{ t('table.run_id') }}</th><th>{{ t('table.task') }}</th><th>{{ t('table.workflow') }}</th><th>{{ t('runs.execution') }}</th>
+        <th>{{ t('table.status') }}</th><th>{{ t('runs.backend') }}</th><th>{{ t('table.time') }}</th>
       </tr>
     </thead>
     <tbody>
@@ -22,10 +22,10 @@
         <td class="mono small"><a href="/runs/{{ run.run_id }}">{{ run.run_id }}</a></td>
         <td class="mono small">{{ run.task_id }}@{{ run.task_version }}</td>
         <td>{{ run.workflow_state }}</td>
-        <td class="small">{{ run.execution_status or '—' }}</td>
+        <td class="small">{{ label('execution', run.execution_status) if run.execution_status else '—' }}</td>
         <td>
           {% if run.assessment_status %}
-          <span class="badge {{ run.assessment_status|lower }}">{{ run.assessment_status }}</span>
+          <span class="badge {{ run.assessment_status|lower }}">{{ label('assessment', run.assessment_status) }}</span>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
         <td class="mono tiny">{{ run.backend or '—' }}</td>
@@ -35,7 +35,7 @@
     </tbody>
   </table>
   {% else %}
-  <p class="muted">还没有运行记录。去 <a href="/">题库</a> 选一道题开始。</p>
+  <p class="muted">{{ t('runs.empty') }}</p>
   {% endif %}
 </section>
 

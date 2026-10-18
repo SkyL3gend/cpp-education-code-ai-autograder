@@ -1,85 +1,76 @@
 {% extends "base.html" %}
-{% block title %}实测结果{% endblock %}
+{% block title %}{{ t('ref.result.title') }}{% endblock %}
 {% block content %}
-<p class="crumbs"><a href="/reference">基准程序实测</a> / {{ report.selfcheck_id }}</p>
+<p class="crumbs"><a href="/reference">{{ t('ref.title') }}</a> / {{ report.selfcheck_id }}</p>
 
 <section class="panel">
   <div class="panel-head">
     <h2>{{ report.source_name }}</h2>
-    <a class="button" href="/reference/{{ report.selfcheck_id }}/report.json">下载 JSON 报告</a>
+    <a class="button" href="/reference/{{ report.selfcheck_id }}/report.json">{{ t('download_report') }}</a>
   </div>
   <table class="kv">
-    <tr><th>实测编号</th><td class="mono">{{ report.selfcheck_id }}</td></tr>
-    <tr><th>源码哈希</th><td class="mono small">{{ report.source_sha256 }}</td></tr>
-    <tr><th>编译</th><td>
-      <span class="badge {{ 'pass' if report.compile.status.value == 'SUCCESS' else 'fail' }}">{{ report.compile.status.value }}</span>
-      <span class="tiny muted">退出码 {{ report.compile.exit_code }} · {{ report.compile.duration_ms }} ms</span>
+    <tr><th>{{ t('ref.col.id') }}</th><td class="mono">{{ report.selfcheck_id }}</td></tr>
+    <tr><th>{{ t('ref.result.hash') }}</th><td class="mono small">{{ report.source_sha256 }}</td></tr>
+    <tr><th>{{ t('ref.result.compile') }}</th><td>
+      <span class="badge {{ 'pass' if report.compile.status.value == 'SUCCESS' else 'fail' }}">{{ label('compile', report.compile.status.value) }}</span>
+      <span class="tiny muted">exit {{ report.compile.exit_code }} · {{ report.compile.duration_ms }} ms</span>
     </td></tr>
-    <tr><th>后端</th><td>
+    <tr><th>{{ t('ref.result.backend') }}</th><td>
       <span class="mono">{{ report.backend_id }}</span>
       {% if report.sandbox_attested %}
-        <span class="badge pass">已通过隔离门禁</span>
+        <span class="badge pass">{{ t('ref.result.attested') }}</span>
       {% else %}
-        <span class="badge not_observed">未通过隔离门禁，结果仅供参考</span>
+        <span class="badge not_observed">{{ t('ref.result.unattested') }}</span>
       {% endif %}
-      {% if report.simulated %}<span class="badge not_observed">模拟后端</span>{% endif %}
+      {% if report.simulated %}<span class="badge not_observed">{{ t('ref.result.simulated') }}</span>{% endif %}
     </td></tr>
-    <tr><th>汇总</th><td>
-      共 {{ report.summary.total }} 项：
-      <strong>{{ report.summary.passed }}</strong> 项符合，
-      <strong>{{ report.summary.defects }}</strong> 项不符，
-      {{ report.summary.not_observed }} 项未观察到
+    <tr><th>{{ t('ref.result.observe') }}</th><td>
+      {{ t('ref.result.summary', total=report.summary.total, passed=report.summary.passed, defects=report.summary.defects, not_observed=report.summary.not_observed) }}
     </td></tr>
-    <tr><th>时间</th><td class="tiny muted">{{ report.started_at }} → {{ report.finished_at }}</td></tr>
+    <tr><th>{{ t('ref.result.time') }}</th><td class="tiny muted">{{ report.started_at }} → {{ report.finished_at }}</td></tr>
   </table>
   <p class="tiny muted">{{ report.note }}</p>
 
   {% if report.compile.status.value != 'SUCCESS' %}
   <div class="banner error">
-    编译未成功，未进入观察阶段。下面是编译器的诊断输出（已截断）：
+    {{ t('ref.result.compile_failed') }}
   </div>
-  <pre class="stdout">{{ compile_stderr or '(无输出)' }}</pre>
+  <pre class="stdout">{{ compile_stderr or '(no output)' }}</pre>
   {% endif %}
 </section>
 
 {% if report.checks %}
 <section class="panel">
   <div class="panel-head">
-    <h2>观察结果</h2>
-    <span class="tiny muted">每条结论都能在“观察值与原始输出”里复核</span>
+    <h2>{{ t('ref.result.observe') }}</h2>
+    <span class="tiny muted">{{ t('ref.result.observe.note') }}</span>
   </div>
   {% for check in report.checks %}
   <div class="check-block">
     <div class="check-title">
-      {% if check.verdict == 'PASS' %}
-        <span class="badge pass">符合</span>
-      {% elif check.verdict == 'DEFECT' %}
-        <span class="badge defect">不符</span>
-      {% else %}
-        <span class="badge not_observed">未观察到</span>
-      {% endif %}
+      <span class="badge {{ check.verdict|lower if check.verdict != 'DEFECT' else 'defect' }}">{{ label('verdict', check.verdict) }}</span>
       <h3>{{ check.title }}</h3>
-      {% if check.rule_ref %}<span class="tiny muted">规则 {{ check.rule_ref }}</span>{% endif %}
-      <span class="tiny muted">{{ check.check_id }} · {{ check.elapsed_ms }} ms · {{ check.termination.value }}</span>
+      {% if check.rule_ref %}<span class="tiny muted">{{ t('ref.result.rule') }} {{ check.rule_ref }}</span>{% endif %}
+      <span class="tiny muted">{{ check.check_id }} · {{ check.elapsed_ms }} ms · {{ label('termination', check.termination.value) }}</span>
     </div>
     <p>{{ check.detail }}</p>
-    <p class="small muted">预期：{{ check.expectation }}</p>
+    <p class="small muted">{{ t('ref.result.expectation') }}: {{ check.expectation }}</p>
     <details class="details">
-      <summary>观察值与原始输出</summary>
+      <summary>{{ t('ref.result.observed') }}</summary>
       <table class="kv wide">
         {% for key, value in check.observed.items() %}
         <tr>
           <th>{{ key }}</th>
           <td class="mono small">
             {% if value is string %}{{ value }}
-            {% elif value is none %}(无)
+            {% elif value is none %}(—)
             {% else %}{{ value|tojson }}{% endif %}
           </td>
         </tr>
         {% endfor %}
       </table>
       {% if outputs.get(check.check_id) %}
-      <p class="tiny muted">程序输出（已截断）：</p>
+      <p class="tiny muted">{{ t('ref.result.output') }}</p>
       <pre class="stdout">{{ outputs.get(check.check_id) }}</pre>
       {% endif %}
     </details>

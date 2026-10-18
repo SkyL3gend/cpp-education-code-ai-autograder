@@ -2,13 +2,13 @@
 {% block title %}{{ task.task_spec.title }}{% endblock %}
 {% block content %}
 
-<p class="crumbs"><a href="/">题库</a> / <span class="mono">{{ task.task_id }}@{{ task.version }}</span></p>
+<p class="crumbs"><a href="/standard">{{ t('nav.tasks') }}</a> / <span class="mono">{{ task.task_id }}@{{ task.version }}</span></p>
 
 <section class="hero">
   <div class="hero-head">
     <h1>{{ task.task_spec.title }}</h1>
     <span class="badge {{ 'published' if task.task_spec.publication_status.value == 'PUBLISHED' else 'draft' }}">
-      {{ task.task_spec.publication_status.value }}
+      {{ label('publication', task.task_spec.publication_status.value) }}
     </span>
   </div>
   <p>{{ task.task_spec.description }}</p>
@@ -16,7 +16,7 @@
 
 <div class="two-col">
   <section class="panel">
-    <div class="panel-head"><h2>功能要求</h2></div>
+    <div class="panel-head"><h2>{{ t('task.rules') }}</h2></div>
     <ol class="rules">
       {% for rule in task.task_spec.rules %}
       <li><span class="mono tiny">{{ rule.rule_id }}</span> {{ rule.statement }}</li>
@@ -25,37 +25,37 @@
   </section>
 
   <section class="panel">
-    <div class="panel-head"><h2>测试方法</h2></div>
+    <div class="panel-head"><h2>{{ t('task.method') }}</h2></div>
     <table class="kv">
-      <tr><th>方法</th><td class="mono small">{{ task.method.method_id }}@{{ task.method.version }}</td></tr>
-      <tr><th>操作</th><td class="mono small">{{ task.template.operation_id }}</td></tr>
-      <tr><th>被测层级</th><td>{{ task.method.subject_level.value }}</td></tr>
-      <tr><th>输入分区</th><td>{{ task.method.input_partitions|length }} 个</td></tr>
-      <tr><th>断言</th><td>{{ task.method.assertions|length }} 条</td></tr>
-      <tr><th>基准工程</th><td class="mono small">{{ task.document.project_ref.project_id }}@{{ task.document.project_ref.version }}
-        <a class="inline-link" href="/tasks/{{ task.task_id }}@{{ task.version }}/base.zip">下载可修改工程</a></td></tr>
+      <tr><th>{{ t('task.method.id') }}</th><td class="mono small">{{ task.method.method_id }}@{{ task.method.version }}</td></tr>
+      <tr><th>{{ t('task.method.operation') }}</th><td class="mono small">{{ task.template.operation_id }}</td></tr>
+      <tr><th>{{ t('task.method.level') }}</th><td>{{ task.method.subject_level.value }}</td></tr>
+      <tr><th>{{ t('task.method.partitions') }}</th><td>{{ task.method.input_partitions|length }}</td></tr>
+      <tr><th>{{ t('task.method.assertions') }}</th><td>{{ task.method.assertions|length }}</td></tr>
+      <tr><th>{{ t('task.method.base') }}</th><td class="mono small">{{ task.document.project_ref.project_id }}@{{ task.document.project_ref.version }}
+        <a class="inline-link" href="/tasks/{{ task.task_id }}@{{ task.version }}/base.zip">{{ t('task.download_base') }}</a></td></tr>
     </table>
   </section>
 </div>
 
 <section class="panel">
   <div class="panel-head">
-    <h2>用例清单</h2>
-    <span class="muted small">共 {{ case_rows|length }} 例 · 输入与预期值不下发页面</span>
+    <h2>{{ t('task.cases') }}</h2>
+    <span class="muted small">{{ t('task.cases.count', count=case_rows|length) }} · {{ t('task.cases.note') }}</span>
   </div>
   <table class="table">
     <thead>
-      <tr><th>用例</th><th>目的</th><th>分区</th><th>规则</th><th>断言</th><th>期望确认</th></tr>
+      <tr><th>{{ t('task.case.id') }}</th><th>{{ t('task.case.purpose') }}</th><th>{{ t('task.case.partitions') }}</th><th>{{ t('task.case.rules') }}</th><th>{{ t('task.case.assertions') }}</th><th>{{ t('task.case.oracle') }}</th></tr>
     </thead>
     <tbody>
       {% for row in case_rows %}
       <tr>
         <td class="mono small">{{ row.case_id }}</td>
-        <td>{{ row.purpose }}</td>
+        <td>{{ label('purpose', row.purpose) }}</td>
         <td class="mono tiny">{{ row.partitions }}</td>
         <td class="mono tiny">{{ row.rules }}</td>
         <td class="mono tiny">{{ row.assertions }}</td>
-        <td>{{ row.oracle_status }}</td>
+        <td>{{ label('oracle', row.oracle_status) }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -64,63 +64,54 @@
 
 <div class="two-col">
   <section class="panel">
-    <div class="panel-head"><h2>演示：以参照版本运行</h2></div>
-    <p class="muted small">
-      参照版本用于校准与演示，结果不计入学生成绩。参照实现应当 PASS，
-      已知缺陷实现应当 FAIL 且命中预期用例。
-    </p>
+    <div class="panel-head"><h2>{{ t('task.demo.title') }}</h2></div>
+    <p class="muted small">{{ t('task.demo.note') }}</p>
     <form method="post" action="/runs" class="form">
       <input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
       <label class="field">
-        <span>参照版本</span>
+        <span>{{ t('task.demo.variant') }}</span>
         <select name="variant" required>
           {% for variant in variants %}
           <option value="{{ variant.variant_id }}">
-            {{ variant.variant_id }} · {{ variant.role }} · 期望 {{ variant.expected_assessment_status }}
+            {{ variant.variant_id }} · {{ label('role', variant.role) }} · {{ label('assessment', variant.expected_assessment_status) }}
           </option>
           {% endfor %}
         </select>
       </label>
-      <button class="button" type="submit">运行参照版本</button>
+      <button class="button" type="submit">{{ t('task.demo.run') }}</button>
     </form>
   </section>
 
   <section class="panel">
-    <div class="panel-head"><h2>提交学生代码</h2></div>
-    <p class="muted small">
-      支持 <code>.zip</code>（包含工程相对路径）或单个 <code>.cpp/.h/.hpp</code> 文件。
-      提交会按相对路径覆盖基准工程中的同名文件；找不到对应文件时拒绝。
-    </p>
-    <p class="muted small">
-      请先在上方下载并修改本任务的基准工程，再提交修改后的源码。
-      仓库里的《参考基准程序/通讯录_v6最终版.cpp》只是出题背景，代码结构与本任务基准工程不同，<strong>不能直接提交</strong>。
-    </p>
+    <div class="panel-head"><h2>{{ t('task.submit.title') }}</h2></div>
+    <p class="muted small">{{ t('task.submit.note') }}</p>
+    <p class="muted small">{{ t('task.submit.note2') }}</p>
     <form method="post" action="/runs" enctype="multipart/form-data" class="form">
       <input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
       <label class="field">
-        <span>提交文件</span>
+        <span>{{ t('task.submit.file') }}</span>
         <input type="file" name="submission" accept=".zip,.cpp,.h,.hpp" required>
       </label>
       <label class="field">
-        <span>修改前快照（可选，.zip）</span>
+        <span>{{ t('task.submit.target_before') }}</span>
         <input type="file" name="target_before" accept=".zip">
       </label>
-      <button class="button primary" type="submit">提交并测评</button>
+      <button class="button primary" type="submit">{{ t('task.submit.button') }}</button>
     </form>
   </section>
 </div>
 
 <section class="panel">
-  <div class="panel-head"><h2>参照版本</h2></div>
+  <div class="panel-head"><h2>{{ t('task.variants.title') }}</h2></div>
   <table class="table">
-    <thead><tr><th>版本</th><th>角色</th><th>说明</th><th>期望结论</th><th>必须命中的失败用例</th></tr></thead>
+    <thead><tr><th>{{ t('task.variants.variant') }}</th><th>{{ t('task.variants.role') }}</th><th>{{ t('task.variants.desc') }}</th><th>{{ t('task.variants.expect') }}</th><th>{{ t('task.variants.must_fail') }}</th></tr></thead>
     <tbody>
       {% for variant in variants %}
       <tr>
         <td class="mono small">{{ variant.variant_id }}</td>
-        <td>{{ variant.role }}</td>
+        <td>{{ label('role', variant.role) }}</td>
         <td>{{ variant.description }}</td>
-        <td><span class="badge {{ variant.expected_assessment_status|lower }}">{{ variant.expected_assessment_status }}</span></td>
+        <td><span class="badge {{ variant.expected_assessment_status|lower }}">{{ label('assessment', variant.expected_assessment_status) }}</span></td>
         <td class="mono tiny">{{ variant.must_fail_cases|join(', ') if variant.must_fail_cases else '—' }}</td>
       </tr>
       {% endfor %}

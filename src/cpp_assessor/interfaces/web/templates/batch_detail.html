@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}{{ batch.batch_id }}{% endblock %}
+{% block content %}
+
+<p class="crumbs"><a href="/batch">{{ t('batch.title') }}</a> / <span class="mono">{{ batch.batch_id }}</span></p>
+
+<section class="hero run-hero">
+  <div>
+    <h1>
+      {{ t('batch.detail.title') }}
+      {% if batch.status == 'completed' %}
+      <span class="badge pass">{{ t('batch.done') }}</span>
+      {% elif batch.status == 'cancelled' %}
+      <span class="badge not_compared">{{ t('batch.cancelled') }}</span>
+      {% elif batch.status == 'running' %}
+      <span class="badge running">{{ t('batch.running') }}</span>
+      {% else %}
+      <span class="badge draft">{{ t('batch.pending') }}</span>
+      {% endif %}
+    </h1>
+    <p class="mono small">{{ batch.batch_id }} · {{ batch.created_at }}</p>
+  </div>
+  <div class="actions">
+    <span class="mono">{{ progress.done }} / {{ progress.total }}</span>
+    {% if batch.status in ['queued', 'running'] %}
+    <form method="post" action="/batch/{{ batch.batch_id }}/cancel">
+      <button class="button" type="submit">{{ t('batch.cancel') }}</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ t('batch.matrix') }}</h2></div>
+  <table class="table matrix">
+    <thead>
+      <tr>
+        <th>{{ t('batch.submission') }}</th>
+        {% for task_ref in batch.tasks %}<th class="mono small">{{ task_ref }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="mono small">{{ row.program.filename }}</td>
+        {% for cell in row.cells %}
+        {% set entry = cell.entry %}
+        <td>
+          {% if entry is none %}
+          <span class="muted">{{ t('batch.not_run') }}</span>
+          {% elif entry.state == 'queued' %}
+          <span class="muted">{{ t('batch.cell.pending') }}</span>
+          {% elif entry.state == 'running' %}
+          <span class="badge running">{{ t('batch.cell.running') }}</span>
+          {% elif entry.state == 'failed' %}
+          <a class="badge fail" href="/runs/{{ entry.run_id }}">{{ t('batch.cell.failed') }}</a>
+          {% elif entry.state == 'cancelled' %}
+          <span class="muted">{{ t('batch.not_run') }}</span>
+          {% elif entry.assessment_status %}
+          <a class="badge {{ entry.assessment_status|lower }}" href="/runs/{{ entry.run_id }}">{{ label('assessment', entry.assessment_status) }}</a>
+          {% else %}
+          <a class="badge draft" href="/runs/{{ entry.run_id }}">{{ entry.execution_status or '—' }}</a>
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ t('batch.progress') }}</h2></div>
+  <table class="table">
+    <thead><tr><th>{{ t('batch.submission') }}</th><th>{{ t('table.task') }}</th><th>{{ t('table.status') }}</th><th>{{ t('table.run_id') }}</th><th>{{ t('run.case.note') }}</th></tr></thead>
+    <tbody>
+      {% for entry in batch.entries %}
+      <tr>
+        <td class="mono small">{{ entry.filename }}</td>
+        <td class="mono small">{{ entry.task_ref }}</td>
+        <td>
+          {% if entry.state == 'queued' %}<span class="muted">{{ t('batch.cell.pending') }}</span>
+          {% elif entry.state == 'running' %}<span class="badge running">{{ t('batch.cell.running') }}</span>
+          {% elif entry.state == 'failed' %}<span class="badge fail">{{ t('batch.cell.failed') }}</span>
+          {% elif entry.state == 'cancelled' %}<span class="muted">{{ t('batch.not_run') }}</span>
+          {% elif entry.assessment_status %}<span class="badge {{ entry.assessment_status|lower }}">{{ label('assessment', entry.assessment_status) }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="mono tiny"><a href="/runs/{{ entry.run_id }}">{{ entry.run_id }}</a></td>
+        <td class="small muted">{{ entry.error or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% endblock %}
+{% block scripts %}
+{% if batch.status in ['queued', 'running'] %}
+<script>
+  const batchId = {{ batch.batch_id|tojson }};
+  const timer = setInterval(async () => {
+    try {
+      const response = await fetch(`/api/batches/${encodeURIComponent(batchId)}`, {cache: "no-store"});
+      const status = await response.json();
+      if (status.status === "completed" || status.status === "cancelled") {
+        clearInterval(timer);
+        window.location.reload();
+      }
+    } catch (err) {
+      clearInterval(timer);
+    }
+  }, 2000);
+</script>
+{% endif %}
+{% endblock %}

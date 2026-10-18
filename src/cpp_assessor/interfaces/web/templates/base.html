@@ -1,26 +1,29 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="{{ 'en' if lang == 'en' else 'zh-CN' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}题库{% endblock %} · C++ 小改自动测评</title>
+  <title>{% block title %}{{ t('nav.tasks') }}{% endblock %} · {{ t('brand') }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/">C++ 小改<span>自动测评</span></a>
+  <a class="brand" href="/">{{ t('brand') }}</a>
   <nav class="nav">
-    <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">题库</a>
-    <a href="/runs" class="{{ 'active' if request.url.path == '/runs' else '' }}">运行记录</a>
-    <a href="/reference" class="{{ 'active' if request.url.path.startswith('/reference') else '' }}">基准程序实测</a>
+    <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">{{ t('nav.modes') }}</a>
+    <a href="/standard" class="{{ 'active' if request.url.path.startswith('/standard') or request.url.path.startswith('/tasks') else '' }}">{{ t('nav.tasks') }}</a>
+    <a href="/batch" class="{{ 'active' if request.url.path.startswith('/batch') else '' }}">{{ t('nav.batch') }}</a>
+    <a href="/runs" class="{{ 'active' if request.url.path == '/runs' or request.url.path.startswith('/runs/') else '' }}">{{ t('nav.runs') }}</a>
+    <a href="/reference" class="{{ 'active' if request.url.path.startswith('/reference') else '' }}">{{ t('nav.reference') }}</a>
   </nav>
+  <a class="lang-switch" href="{{ switch_url }}" title="{{ t('nav.lang_title') }}">{{ t('nav.lang') }}</a>
   <span class="version">v{{ app_version }}</span>
 </header>
 <main class="wrap">
 {% block content %}{% endblock %}
 </main>
 <footer class="footer">
-  本地原型 · 仅模式一（标准测评）· 正确性由测试用例判定，AI 诊断不参与评分
+  {{ t('footer') }}
 </footer>
 {% block scripts %}{% endblock %}
 </body>

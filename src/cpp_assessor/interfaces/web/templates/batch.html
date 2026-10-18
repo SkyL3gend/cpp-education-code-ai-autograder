@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ t('batch.title') }}{% endblock %}
+{% block content %}
+
+<section class="hero">
+  <h1>{{ t('batch.heading') }}</h1>
+  <p>{{ t('batch.intro') }}</p>
+</section>
+
+<section class="panel">
+  <form method="post" action="/batch" enctype="multipart/form-data" class="form">
+    <div class="field">
+      <span>{{ t('batch.tasks') }}</span>
+      <div class="check-grid">
+        {% for task in tasks %}
+        <label class="check">
+          <input type="checkbox" name="tasks" value="{{ task.task_id }}@{{ task.version }}" checked>
+          <span class="mono small">{{ task.task_id }}@{{ task.version }}</span>
+          <span class="muted small">{{ task.title }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <label class="field">
+      <span>{{ t('batch.files') }}</span>
+      <input type="file" name="submissions" accept=".zip" multiple required>
+    </label>
+    <p class="muted small">{{ t('batch.limit') }}</p>
+    <div>
+      <button class="button primary" type="submit">{{ t('batch.submit') }}</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ t('batch.recent') }}</h2></div>
+  {% if batches %}
+  <table class="table">
+    <thead><tr><th>{{ t('batch.batch_id') }}</th><th>{{ t('table.status') }}</th><th>{{ t('batch.progress') }}</th><th>{{ t('batch.time') }}</th></tr></thead>
+    <tbody>
+      {% for batch in batches %}
+      <tr>
+        <td class="mono small"><a href="/batch/{{ batch.batch_id }}">{{ batch.batch_id }}</a></td>
+        <td>
+          {% if batch.status == 'completed' %}<span class="badge pass">{{ t('batch.done') }}</span>
+          {% elif batch.status == 'cancelled' %}<span class="badge not_compared">{{ t('batch.cancelled') }}</span>
+          {% elif batch.status == 'running' %}<span class="badge running">{{ t('batch.running') }}</span>
+          {% else %}<span class="badge draft">{{ t('batch.pending') }}</span>{% endif %}
+        </td>
+        <td class="mono small">{{ batch.entries|selectattr('state', 'in', ['done', 'failed'])|list|length }} / {{ batch.entries|length }}</td>
+        <td class="mono small">{{ batch.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">{{ t('batch.recent.empty') }}</p>
+  {% endif %}
+</section>
+
+{% endblock %}

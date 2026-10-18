@@ -4,15 +4,15 @@
 
 <section class="waiting">
   <div class="spinner" aria-hidden="true"></div>
-  <h1>正在测评…</h1>
+  <h1>{{ t('waiting.title') }}</h1>
   <p class="mono">{{ run_id }}</p>
   {% if row %}
-  <p class="muted">任务 {{ row.task_id }}@{{ row.task_version }} · 工作流 {{ row.workflow_state }}</p>
+  <p class="muted">{{ t('waiting.detail', task=row.task_id ~ '@' ~ row.task_version, state=row.workflow_state) }}</p>
   {% else %}
-  <p class="muted">任务已排队，等待工作线程开始。</p>
+  <p class="muted">{{ t('waiting.queued') }}</p>
   {% endif %}
   {% if error %}
-  <div class="banner error"><strong>运行失败</strong>：{{ error }}</div>
+  <div class="banner error"><strong>{{ t('waiting.failed') }}</strong>: {{ error }}</div>
   {% endif %}
 </section>
 

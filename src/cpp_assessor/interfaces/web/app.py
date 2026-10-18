@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -42,6 +43,19 @@ from ...selfcheck import (
 )
 from ...storage.db import Database
 from ...tasks.loader import list_tasks, load_task
+from .batch import (
+    MAX_PROGRAMS,
+    MAX_TASKS,
+    batch_directory,
+    build_batch,
+    count_progress,
+    list_batches,
+    matrix,
+    new_batch_id,
+    read_batch,
+    write_batch,
+)
+from .i18n import label, normalize_lang, translator
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -234,6 +248,27 @@ def _save_upload(upload: UploadFile, destination: Path, max_bytes: int) -> Path:
     return target
 
 
+def _batch_dir(settings: WebSettings, batch_id: str) -> Path:
+    try:
+        return batch_directory(settings.data_root, batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _current_lang(request: Request) -> str:
+    query = request.query_params.get("lang")
+    if query:
+        return normalize_lang(query)
+    return normalize_lang(request.cookies.get("assessor_lang"))
+
+
+def _language_switch_url(request: Request) -> str:
+    target = "en" if _current_lang(request) == "zh" else "zh"
+    pairs = [(k, v) for k, v in request.query_params.multi_items() if k != "lang"]
+    pairs.append(("lang", target))
+    return f"{request.url.path}?{urlencode(pairs)}"
+
+
 def _render(
     request: Request,
     templates: Jinja2Templates,
@@ -241,10 +276,20 @@ def _render(
     status_code: int = 200,
     **context: Any,
 ) -> HTMLResponse:
+    lang = _current_lang(request)
     context.setdefault("app_version", ASSESSOR_VERSION)
-    return templates.TemplateResponse(
+    context.setdefault("lang", lang)
+    context.setdefault("t", translator(lang))
+    context.setdefault("label", label)
+    context.setdefault("switch_url", _language_switch_url(request))
+    response = templates.TemplateResponse(
         request=request, name=name, context=context, status_code=status_code
     )
+    if request.query_params.get("lang"):
+        response.set_cookie(
+            "assessor_lang", lang, max_age=31_536_000, samesite="lax", httponly=False
+        )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +319,17 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
     # -- 页面 ---------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse)
-    def index(request: Request) -> HTMLResponse:
+    def modes_page(request: Request) -> HTMLResponse:
+        return _render(
+            request,
+            templates,
+            "modes.html",
+            settings=settings,
+            capabilities=make_backend(settings.backend).capabilities(),
+        )
+
+    @app.get("/standard", response_class=HTMLResponse)
+    def standard_index(request: Request) -> HTMLResponse:
         capabilities = make_backend(settings.backend).capabilities()
         recent = db().list_runs(limit=10)
         return _render(
@@ -629,6 +684,206 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
                 "Content-Disposition": f'attachment; filename="{selfcheck_id}.json"'
             },
         )
+
+    # -- 批量测评 -----------------------------------------------------------
+
+    def _run_batch_job(directory: Path, batch: dict[str, Any]) -> None:
+        """在单工作线程里串行执行“程序 × 任务”矩阵。"""
+        batch["status"] = "running"
+        write_batch(directory, batch)
+        cancelled = False
+        try:
+            for entry in batch["entries"]:
+                if (directory / "CANCEL").exists():
+                    cancelled = True
+                if cancelled:
+                    entry["state"] = "cancelled"
+                    write_batch(directory, batch)
+                    continue
+                entry["state"] = "running"
+                app.state.pending[entry["run_id"]] = "running"
+                write_batch(directory, batch)
+                program = next(
+                    item
+                    for item in batch["programs"]
+                    if item["program_id"] == entry["program_id"]
+                )
+                options = RunOptions(
+                    task_ref=entry["task_ref"],
+                    submission=Path(program["path"]),
+                    backend=settings.backend,
+                    allow_draft=settings.allow_draft,
+                    allow_unattested=settings.allow_unattested,
+                    data_dir=settings.data_root,
+                    task_library=settings.library,
+                    run_id=entry["run_id"],
+                )
+                try:
+                    result = execute_standard_run(options)
+                    entry["state"] = "done"
+                    report = result.report
+                    entry["assessment_status"] = (
+                        report.assessment_status.value if report else None
+                    )
+                    entry["execution_status"] = (
+                        report.execution_status.value
+                        if report
+                        else (
+                            result.execution_status.value
+                            if result.execution_status
+                            else None
+                        )
+                    )
+                except BaseException as exc:  # noqa: BLE001 - 线程内异常要展示给页面
+                    entry["state"] = "failed"
+                    entry["error"] = f"{type(exc).__name__}: {exc}"
+                    app.state.errors[entry["run_id"]] = entry["error"]
+                finally:
+                    app.state.pending.pop(entry["run_id"], None)
+                    write_batch(directory, batch)
+            batch["status"] = "cancelled" if cancelled else "completed"
+        except BaseException as exc:  # noqa: BLE001 - 批次级失败也要落盘
+            for pending_entry in batch["entries"]:
+                if pending_entry["state"] in {"queued", "running"}:
+                    pending_entry["state"] = "failed"
+                    pending_entry["error"] = f"{type(exc).__name__}: {exc}"
+            batch["status"] = "completed"
+            batch["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            batch["finished_at"] = datetime.now(timezone.utc).isoformat()
+            write_batch(directory, batch)
+
+    @app.get("/batch", response_class=HTMLResponse)
+    def batch_page(request: Request) -> HTMLResponse:
+        return _render(
+            request,
+            templates,
+            "batch.html",
+            tasks=list_tasks(settings.library),
+            batches=list_batches(settings.data_root, limit=8),
+            max_programs=MAX_PROGRAMS,
+            max_tasks=MAX_TASKS,
+            settings=settings,
+        )
+
+    @app.post("/batch")
+    async def create_batch(
+        request: Request,
+        tasks: list[str] = Form(...),
+        submissions: list[UploadFile] = File(...),
+    ) -> Response:
+        selected: list[str] = []
+        for raw in tasks:
+            ref = (raw or "").strip()
+            if ref and ref not in selected:
+                selected.append(ref)
+        if not selected:
+            raise HTTPException(status_code=400, detail="请至少选择一道题")
+        if len(selected) > MAX_TASKS:
+            raise HTTPException(
+                status_code=400, detail=f"一次最多选择 {MAX_TASKS} 道题"
+            )
+        for ref in selected:
+            try:
+                load_task(ref, task_library=settings.library, allow_draft=True)
+            except AssessorError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        uploads = [item for item in submissions if item is not None and item.filename]
+        if not uploads:
+            raise HTTPException(status_code=400, detail="请至少上传一个 .zip 程序")
+        if len(uploads) > MAX_PROGRAMS:
+            raise HTTPException(
+                status_code=400, detail=f"一次最多上传 {MAX_PROGRAMS} 个程序"
+            )
+
+        batch_id = new_batch_id()
+        directory = _batch_dir(settings, batch_id)
+        programs: list[dict[str, str]] = []
+        for index, upload in enumerate(uploads, start=1):
+            name = Path(upload.filename or "").name
+            if Path(name).suffix.lower() != ".zip":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"批量测评目前只接受 .zip（每个 zip 是一个程序）：{name}",
+                )
+            try:
+                saved = _save_upload(
+                    upload, directory / "uploads", settings.max_upload_bytes
+                )
+            except InvalidInputError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            programs.append(
+                {
+                    "program_id": f"p{index}",
+                    "filename": name,
+                    "path": str(saved),
+                }
+            )
+
+        batch = build_batch(
+            batch_id=batch_id,
+            tasks=selected,
+            programs=programs,
+            run_id_factory=new_run_id,
+        )
+        write_batch(directory, batch)
+        for entry in batch["entries"]:
+            app.state.pending[entry["run_id"]] = "queued"
+        app.state.executor.submit(_run_batch_job, directory, batch)
+        return RedirectResponse(url=f"/batch/{batch_id}", status_code=303)
+
+    @app.get("/batch/{batch_id}", response_class=HTMLResponse)
+    def batch_detail(request: Request, batch_id: str) -> HTMLResponse:
+        directory = _batch_dir(settings, batch_id)
+        batch = read_batch(directory)
+        if batch is None:
+            return _render(
+                request,
+                templates,
+                "error.html",
+                status_code=404,
+                message=f"找不到批次：{batch_id}",
+            )
+        return _render(
+            request,
+            templates,
+            "batch_detail.html",
+            batch=batch,
+            rows=matrix(batch),
+            progress=count_progress(batch),
+            settings=settings,
+        )
+
+    @app.get("/api/batches/{batch_id}")
+    def batch_status(batch_id: str) -> JSONResponse:
+        batch = read_batch(_batch_dir(settings, batch_id))
+        if batch is None:
+            raise HTTPException(status_code=404, detail="找不到批次")
+        return JSONResponse(
+            {
+                "batch_id": batch["batch_id"],
+                "status": batch["status"],
+                "progress": count_progress(batch),
+            }
+        )
+
+    @app.post("/batch/{batch_id}/cancel")
+    def cancel_batch(batch_id: str) -> Response:
+        directory = _batch_dir(settings, batch_id)
+        batch = read_batch(directory)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="找不到批次")
+        (directory / "CANCEL").write_text("cancel requested\n", encoding="utf-8")
+        for entry in batch["entries"]:
+            if entry.get("state") != "running":
+                continue
+            run_dir = settings.data_root / "runs" / entry["run_id"]
+            if run_dir.is_dir():
+                (run_dir / "CANCEL").write_text(
+                    "cancel requested from batch\n", encoding="utf-8"
+                )
+        return RedirectResponse(url=f"/batch/{batch_id}", status_code=303)
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:

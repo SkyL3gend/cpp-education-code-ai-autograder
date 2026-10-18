@@ -61,12 +61,34 @@ def _start_variant_run(client: TestClient, variant: str = "correct") -> str:
     return location.rsplit("/", 1)[-1]
 
 
-def test_index_lists_tasks(client: TestClient) -> None:
+def test_modes_page_offers_standard_and_disabled_llm(client: TestClient) -> None:
     response = client.get("/")
+    assert response.status_code == 200
+    body = response.text
+    assert "基准模式" in body
+    assert "LLM 模式" in body
+    assert "暂未开放" in body
+    assert 'href="/standard"' in body
+    # LLM 模式按钮是禁用状态，没有可用链接。
+    assert 'href="/llm"' not in body
+
+
+def test_index_lists_tasks(client: TestClient) -> None:
+    response = client.get("/standard")
     assert response.status_code == 200
     assert "t1_phone_validation" in response.text
     assert "t3_date_validation" in response.text
     assert "模拟后端已启用" in response.text
+
+
+def test_language_switch_renders_english(client: TestClient) -> None:
+    response = client.get("/?lang=en")
+    assert response.status_code == 200
+    assert "lang=\"en\"" in response.text
+    assert "Choose an assessment mode" in response.text
+    assert "Standard mode" in response.text
+    # 语言只影响展示：任务编号与枚举值仍是英文代码。
+    assert "Accepted" not in response.text or "PASS" in response.text
 
 
 def test_task_page_hides_case_inputs_and_expected(client: TestClient) -> None:
@@ -88,7 +110,8 @@ def test_variant_run_reports_pass_and_exports(client: TestClient) -> None:
 
     page = client.get(f"/runs/{run_id}")
     assert page.status_code == 200
-    assert "PASS" in page.text
+    assert "Accepted" in page.text
+    assert "通过" in page.text
     assert "c_non_digit_11" in page.text
 
     report_json = client.get(f"/runs/{run_id}/report.json")
@@ -106,7 +129,8 @@ def test_faulty_variant_reports_fail(local_client: TestClient) -> None:
     status = _wait_for_run(local_client, run_id, timeout=120.0)
     assert status["assessment_status"] == "FAIL"
     page = local_client.get(f"/runs/{run_id}")
-    assert "FAIL" in page.text
+    assert "Rejected" in page.text
+    assert "未通过" in page.text
 
 
 def test_create_run_requires_submission_or_variant(client: TestClient) -> None:
@@ -179,6 +203,71 @@ def test_base_project_download_and_submission_guidance(client: TestClient) -> No
         names = handle.namelist()
     assert any(name.endswith("validators.cpp") for name in names)
     assert any(name.endswith("contactbook.h") for name in names)
+
+
+def _wait_for_batch(client: TestClient, batch_id: str, timeout: float = 60.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = client.get(f"/api/batches/{batch_id}").json()
+        if payload["status"] in {"completed", "cancelled"}:
+            return payload
+        time.sleep(0.2)
+    raise AssertionError(f"批次未在 {timeout}s 内结束：{batch_id}")
+
+
+def _zip_project(tmp_path: Path, name: str) -> Path:
+    from cpp_assessor.tasks.loader import load_task
+
+    project_root = load_task(TASK_REF).project_root
+    target = tmp_path / name
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(project_root.iterdir()):
+            if path.is_file() and path.suffix.lower() in {".cpp", ".h", ".hpp"}:
+                archive.write(path, path.name)
+    return target
+
+
+def test_batch_runs_programs_times_tasks(client: TestClient, tmp_path: Path) -> None:
+    zips = [_zip_project(tmp_path, "p1.zip"), _zip_project(tmp_path, "p2.zip")]
+    files = [("submissions", (path.name, path.read_bytes(), "application/zip")) for path in zips]
+    response = client.post(
+        "/batch",
+        data={"tasks": [TASK_REF, "t2_birthday_today@1.0.0"]},
+        files=files,
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    batch_id = response.headers["location"].rsplit("/", 1)[-1]
+
+    status = _wait_for_batch(client, batch_id)
+    assert status["status"] == "completed"
+    assert status["progress"]["total"] == 4
+    assert status["progress"]["done"] == 4
+    assert status["progress"]["errors"] == 0
+
+    page = client.get(f"/batch/{batch_id}")
+    assert page.status_code == 200
+    assert "t1_phone_validation@1.0.0" in page.text
+    assert "t2_birthday_today@1.0.0" in page.text
+    assert "Accepted" in page.text
+    # 每个格子都能点进单次运行报告。
+    entries = client.get(f"/batch/{batch_id}").text.count('href="/runs/run_')
+    assert entries >= 4
+
+    listing = client.get("/batch")
+    assert listing.status_code == 200
+    assert batch_id in listing.text
+
+
+def test_batch_rejects_non_zip(client: TestClient) -> None:
+    response = client.post(
+        "/batch",
+        data={"tasks": [TASK_REF]},
+        files={"submissions": ("p1.cpp", b"int main(){return 0;}\n", "text/plain")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert ".zip" in response.text
 
 
 def test_reference_selfcheck_page_and_run(local_client: TestClient) -> None:
