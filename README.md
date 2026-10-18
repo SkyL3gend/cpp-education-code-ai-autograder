@@ -1,12 +1,13 @@
-# 面向 C++ 程序设计教学的代码小改自动测评与 AI 诊断系统（CLI 原型）
+# 面向 C++ 程序设计教学的代码小改自动测评与 AI 诊断系统（CLI + 本地 Web）
 
-本仓库是《双模式测评系统架构与实施方案》v0.2 的**第一步实现**：按任务书
+本仓库是《双模式测评系统架构与实施方案》v0.2 的第一步实现：按任务书
 “第 1—2 周交付能运行 5 道小改题的 CLI 原型”的要求，完成**模式一（标准测评）**
 的完整闭环——导入提交、构建受测工程、在受限后端中执行预配置用例、用可信断言
 比对观测、生成可追溯的结构化 JSON 报告，并用参照版本完成校准。
 
-当前版本**只做模式一**：不包含 LLM 诊断、模式二（LLM 生成判断程序）与 Web 界面。
-这符合实施方案 §14 的实施顺序，也保证“正确性由测试用例判定”的底线先立起来。
+当前版本（0.2.0）在 CLI 之上增加了**本地 Web 界面**，同样只覆盖模式一：
+不包含 LLM 诊断与模式二（LLM 生成判断程序）。这符合实施方案 §14 的实施顺序，
+也保证“正确性由测试用例判定”的底线先立起来。
 
 ## 1. 已实现的功能
 
@@ -19,6 +20,9 @@
 - **报告与证据**：每次运行生成 `objective_report.json`（含覆盖情况、用例与断言计数、
   判定理由、执行后端与校验等级），并保留原始 stdout/stderr、观测、编译日志、
   构建计划、校验记录，可用 `replay` 命令从证据复现判定。
+- **本地 Web 界面**：浏览器里选题、上传提交（目录 / 单文件 / ZIP）、查看等待与
+  结果页、下载 JSON/CSV、取消运行；后端用单线程队列串行执行，与 CLI 共用同一套
+  运行器、判定与证据。
 - **校准**：`tools/calibrate.py` 对每题运行“正确实现”和“已知缺陷实现”，
   校验正确实现通过、缺陷实现被指定用例识别，并写入 SQLite 与 JSON 记录。
 - **执行后端**：本地 Win32 Job Object 受限后端（CPU/内存/进程数/墙钟/进程树终止）
@@ -33,7 +37,11 @@
 | Python | ≥ 3.11 | 3.12.10 |
 | pydantic | ≥ 2.6 | 2.14.1 |
 | jsonschema | ≥ 4.20 | 4.26.0 |
+| fastapi | ≥ 0.110 | 0.143.5 |
+| uvicorn | ≥ 0.27 | 0.54.0 |
+| jinja2 | ≥ 3.1 | 3.1.6 |
 | pytest（开发） | ≥ 8 | 9.1.1 |
+| httpx（开发，Web 测试） | ≥ 0.27 | 已安装 |
 | g++ | 支持 C++17 | 13.2.0（MinGW-W64 x86_64-ucrt-posix-seh） |
 | 操作系统 | Windows 10/11 x64 | Windows（中文路径已验证） |
 
@@ -66,10 +74,38 @@ python assessor.py report <run_id> --format csv      # 默认写到 data/exports
 # 5) 从证据复现判定
 python assessor.py replay <run_id>
 
-# 6) 回归测试
+# 6) 启动本地 Web 界面（默认 http://127.0.0.1:8765）
+python assessor.py web
+#    本机后端未过门禁时，允许在 Web 里显式放行：
+python assessor.py web --allow-unattested-backend
+
+# 7) 回归测试
 python -m pytest
 python tools\calibrate.py
 ```
+
+### 使用本地 Web 界面
+
+```powershell
+python assessor.py web                      # 打开 http://127.0.0.1:8765
+python assessor.py web --allow-unattested-backend   # 本地 Job Object 后端下允许真实运行
+python assessor.py web --backend mock --no-open     # 演示 Web 流程（不执行代码）
+```
+
+| 页面 / 接口 | 作用 |
+| --- | --- |
+| `GET /` | 题库列表、最近运行、当前后端能力与门禁状态 |
+| `GET /tasks/<task_ref>` | 功能要求、规则、用例清单；选择参照版本或上传提交 |
+| `POST /runs` | 创建运行（`variant=correct/faulty` 或上传目录/ZIP/单文件） |
+| `GET /runs/<run_id>` | 等待页 / 结果页（结论、计数、逐用例断言明细、证据路径） |
+| `GET /api/runs/<run_id>` | 运行状态 JSON（供页面轮询） |
+| `POST /runs/<run_id>/cancel` | 写入取消标记 |
+| `GET /runs/<run_id>/report.json` / `report.csv` | 下载报告（CSV 带 BOM、防公式注入） |
+| `GET /healthz` | 健康检查 |
+
+Web 端只负责“选题—提交—查看—导出”，判定完全复用 CLI 的运行器与断言引擎；
+运行在进程内单线程队列中串行执行（与实施方案“第一版单工作进程串行队列”一致）。
+界面默认只监听 `127.0.0.1`，且**没有登录与鉴权**，不要直接暴露到公网。
 
 ### 关于“不计入正式成绩”
 
@@ -112,6 +148,7 @@ python tools\calibrate.py
 | `assessor cancel <run_id>` | 写入取消标记；运行器在阶段边界检查并取消 |
 | `assessor report <run_id> --format json\|csv [--out <path>]` | 导出报告；CSV 带 BOM 且做了公式注入防护 |
 | `assessor replay <run_id>` | 用保存的观测重新执行断言，与报告逐条比对 |
+| `assessor web [--host] [--port] [--backend local\|mock] [--allow-unattested-backend] [--allow-draft] [--no-open]` | 启动本地 Web 界面 |
 
 `run` 的退出码：`0` 通过、`1` 失败、`2` 未测评、`3` 不确定、`4` 基础设施错误、
 `130` 取消。**退出码不区分是否具备正式评分资格**，资格请看报告里的 `grade_eligible`。
@@ -150,7 +187,7 @@ src/cpp_assessor/
   judge/        # 断言引擎、覆盖计算、判定聚合
   storage/      # SQLite、工件存储
   reporting/    # JSON/CSV 导出
-  interfaces/   # CLI
+  interfaces/   # CLI 与本地 Web（FastAPI + Jinja2 模板 + 静态资源）
 task_library/
   projects/contactbook_base/1.0.0/   # 学生修改的初始工程
   shared/harness/                    # 标准输入输出测试驱动
@@ -175,14 +212,17 @@ docs/           # 使用手册、设计说明、实验报告
 
 1. **隔离等级不足**：本地 Job Object 后端无法阻断网络与文件系统访问，按门禁
    `grade_eligible` 恒为 `false`；需接入 Windows Sandbox 或固定虚拟机后端。
-2. **只实现模式一**：LLM 诊断（任务 3）、模式二、Web 界面（任务 4）尚未开始。
-3. **题量为 5 题**：任务书要求最终 ≥10 题、每题 ≥4 用例；当前 26 个用例覆盖
+2. **只实现模式一**：LLM 诊断（任务 3）与模式二尚未开始；Web 界面只覆盖
+   任务书任务 4 的“选题 / 提交 / 查看结果 / 导出”最小闭环。
+3. **Web 端无鉴权、无多用户隔离**：只监听本机回环地址；上传文件保存在
+   `data/web_uploads/`，不会自动清理；任务书要求的班级、成绩管理不在本阶段范围。
+4. **题量为 5 题**：任务书要求最终 ≥10 题、每题 ≥4 用例；当前 26 个用例覆盖
    正常与边界，第 3—4 周扩展到 10 题 40 用例。
-4. **驱动方式**：当前只支持标准输入输出型（`STDIN_SCRIPT`），函数级驱动
+5. **驱动方式**：当前只支持标准输入输出型（`STDIN_SCRIPT`），函数级驱动
    （`FUNCTION_DRIVER`）尚未实现。
-5. **模板中的动作前观测与 `UNCHANGED` 断言**已实现并有单元测试，但五个任务包
+6. **模板中的动作前观测与 `UNCHANGED` 断言**已实现并有单元测试，但五个任务包
    暂未使用；后续题库会补充“操作前后不变”的用例。
-6. **提交匹配**：学生提交按相对路径覆盖基准工程，找不到时用唯一文件名匹配；
+7. **提交匹配**：学生提交按相对路径覆盖基准工程，找不到时用唯一文件名匹配；
    生产环境应加入更严格的工程结构校验与人工复核入口。
 
 ## 10. 文档

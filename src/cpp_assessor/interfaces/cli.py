@@ -13,6 +13,8 @@
     assessor cancel <run_id>
     assessor report <run_id> [--format json|csv] [--out <path>]
     assessor replay <run_id>
+    assessor web [--host] [--port] [--backend local|mock]
+                 [--allow-unattested-backend] [--allow-draft] [--no-open]
 
 退出码：PASS=0、FAIL=1、NOT_ASSESSED=2、INCONCLUSIVE=3、基础设施错误=4、取消=130。
 """
@@ -308,6 +310,35 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# web 子命令
+# ---------------------------------------------------------------------------
+
+
+def _cmd_web(args: argparse.Namespace) -> int:
+    # 延迟导入：不使用 Web 时不必安装 fastapi/uvicorn。
+    from .web.app import WebSettings, serve
+
+    settings = WebSettings(
+        backend=args.backend,
+        allow_unattested=args.allow_unattested_backend,
+        allow_draft=args.allow_draft,
+    )
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        print(
+            f"警告：Web 界面没有登录与鉴权，当前监听 {args.host}，"
+            "同网段任何人都能提交代码；仅建议在本机使用。",
+            file=sys.stderr,
+        )
+    serve(
+        settings,
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_open,
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # 解析器
 # ---------------------------------------------------------------------------
 
@@ -374,6 +405,19 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser = sub.add_parser("replay", help="用已保存的证据复现判定")
     replay_parser.add_argument("run_id")
     replay_parser.set_defaults(func=_cmd_replay)
+
+    web_parser = sub.add_parser("web", help="启动本地 Web 界面")
+    web_parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认仅本机）")
+    web_parser.add_argument("--port", type=int, default=8765)
+    web_parser.add_argument("--backend", default="local", choices=["local", "mock"])
+    web_parser.add_argument(
+        "--allow-unattested-backend",
+        action="store_true",
+        help="允许在未通过能力门禁的后端上运行（报告标注 grade_eligible=false）",
+    )
+    web_parser.add_argument("--allow-draft", action="store_true", help="允许运行未发布任务")
+    web_parser.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    web_parser.set_defaults(func=_cmd_web)
 
     return parser
 

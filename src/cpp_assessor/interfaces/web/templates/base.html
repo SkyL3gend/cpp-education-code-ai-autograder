@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}题库{% endblock %} · C++ 小改自动测评</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">C++ 小改<span>自动测评</span></a>
+  <nav class="nav">
+    <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">题库</a>
+    <a href="/runs" class="{{ 'active' if request.url.path == '/runs' else '' }}">运行记录</a>
+  </nav>
+  <span class="version">v{{ app_version }}</span>
+</header>
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+<footer class="footer">
+  本地原型 · 仅模式一（标准测评）· 正确性由测试用例判定，AI 诊断不参与评分
+</footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

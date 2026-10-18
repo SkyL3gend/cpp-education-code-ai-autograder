@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}运行记录{% endblock %}
+{% block content %}
+
+<section class="hero">
+  <h1>运行记录</h1>
+  <p>所有运行都保存在 <code>data/runs/&lt;run_id&gt;/</code>，包含报告、观测、编译日志与证据。</p>
+</section>
+
+<section class="panel">
+  {% if runs %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>run_id</th><th>任务</th><th>工作流</th><th>执行状态</th>
+        <th>结论</th><th>后端</th><th>时间</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td class="mono small"><a href="/runs/{{ run.run_id }}">{{ run.run_id }}</a></td>
+        <td class="mono small">{{ run.task_id }}@{{ run.task_version }}</td>
+        <td>{{ run.workflow_state }}</td>
+        <td class="small">{{ run.execution_status or '—' }}</td>
+        <td>
+          {% if run.assessment_status %}
+          <span class="badge {{ run.assessment_status|lower }}">{{ run.assessment_status }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="mono tiny">{{ run.backend or '—' }}</td>
+        <td class="mono small">{{ run.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">还没有运行记录。去 <a href="/">题库</a> 选一道题开始。</p>
+  {% endif %}
+</section>
+
+{% endblock %}

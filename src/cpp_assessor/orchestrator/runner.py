@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import time
 import traceback
@@ -126,6 +127,7 @@ class RunOptions:
     variant: str | None = None
     data_dir: Path | None = None
     task_library: Path | None = None
+    run_id: str | None = None
 
 
 @dataclass
@@ -144,6 +146,9 @@ class RunResult:
 # ---------------------------------------------------------------------------
 # 公共入口
 # ---------------------------------------------------------------------------
+
+
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 
 
 def new_run_id() -> str:
@@ -226,8 +231,14 @@ def execute_standard_run(options: RunOptions) -> RunResult:
     )
     backend = make_backend(options.backend)
 
-    run_id = new_run_id()
+    run_id = options.run_id or new_run_id()
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise InvalidInputError(
+            f"run_id 不合法：{run_id!r}（只允许字母、数字、下划线、点、冒号、短横线）"
+        )
     run_dir = data_root / "runs" / run_id
+    if run_dir.exists():
+        raise InvalidInputError(f"run 目录已存在，拒绝覆盖：{run_dir}")
     store = ArtifactStore(data_root / "runs", run_id)
     db = Database(data_root / "app.sqlite3")
 

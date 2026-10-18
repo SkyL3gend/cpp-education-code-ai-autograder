@@ -4,17 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cpp-assessor"
-version = "0.1.0"
-description = "面向 C++ 程序设计教学的代码小改自动测评与 AI 诊断系统（CLI 原型，模式一）"
+version = "0.2.0"
+description = "面向 C++ 程序设计教学的代码小改自动测评与 AI 诊断系统（CLI + 本地 Web，模式一）"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",
     "jsonschema>=4.20",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]
 assessor = "cpp_assessor.interfaces.cli:main"

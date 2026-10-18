@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}{{ report.run_id }}{% endblock %}
+{% block content %}
+
+<p class="crumbs"><a href="/">题库</a> / <a href="/runs">运行记录</a> / <span class="mono">{{ report.run_id }}</span></p>
+
+<section class="hero run-hero">
+  <div>
+    <h1>
+      判定结论
+      <span class="badge big {{ report.assessment_status.value|lower }}">{{ report.assessment_status.value }}</span>
+    </h1>
+    <p class="mono small">{{ report.provenance.task_id }}@{{ report.provenance.task_version }} · {{ report.run_id }}</p>
+  </div>
+  <div class="actions">
+    <a class="button" href="/runs/{{ report.run_id }}/report.json">下载 JSON</a>
+    <a class="button" href="/runs/{{ report.run_id }}/report.csv">下载 CSV</a>
+  </div>
+</section>
+
+{% if report.provenance.execution_backend == 'mock' %}
+<div class="banner warn">
+  <strong>模拟执行</strong>：本次结果由 mock 后端合成，未编译或运行任何代码，仅用于验证状态机与报告链路。
+</div>
+{% elif not report.grade_eligible %}
+<div class="banner warn">
+  <strong>不计入正式成绩</strong>：{{ report.grade_eligible_reasons|map('reason_label')|join('；') if report.grade_eligible_reasons else '执行后端或校验等级不满足正式判定条件' }}。
+</div>
+{% endif %}
+
+<section class="panel">
+  <table class="kv wide">
+    <tr><th>执行状态</th><td><span class="badge {{ report.execution_status.value|lower }}">{{ report.execution_status.value }}</span></td>
+        <th>工作流</th><td>{{ row.workflow_state if row else '—' }}</td></tr>
+    <tr><th>校验等级</th><td>{{ report.validation_level.value }}</td>
+        <th>模式</th><td>{{ report.mode.value }}</td></tr>
+    <tr><th>执行后端</th><td class="mono small">{{ report.provenance.execution_backend }}
+        {% if report.provenance.sandbox_attested %}<span class="badge pass">已过门禁</span>{% else %}<span class="badge draft">未过门禁</span>{% endif %}</td>
+        <th>正式成绩资格</th><td>{{ '是' if report.grade_eligible else '否' }}</td></tr>
+    <tr><th>提交快照</th><td class="mono tiny">{{ report.provenance.submission_id or '—' }}</td>
+        <th>工具链</th><td class="mono small">{{ report.provenance.toolchain_id }}</td></tr>
+    <tr><th>开始</th><td class="mono small">{{ report.provenance.started_at }}</td>
+        <th>结束</th><td class="mono small">{{ report.provenance.finished_at }}</td></tr>
+  </table>
+  {% if report.observations_note %}
+  <p class="muted small">{{ report.observations_note }}</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>计数</h2></div>
+  <div class="stats">
+    <div class="stat"><span class="stat-label">必测用例</span><span class="stat-value">{{ report.counts.required_cases }}</span></div>
+    <div class="stat"><span class="stat-label">已尝试</span><span class="stat-value">{{ report.counts.attempted_cases }}</span></div>
+    <div class="stat"><span class="stat-label">完成</span><span class="stat-value">{{ report.counts.completed_cases }}</span></div>
+    <div class="stat pass"><span class="stat-label">一致</span><span class="stat-value">{{ report.counts.matched_cases }}</span></div>
+    <div class="stat fail"><span class="stat-label">不一致</span><span class="stat-value">{{ report.counts.mismatched_cases }}</span></div>
+    <div class="stat"><span class="stat-label">未比较</span><span class="stat-value">{{ report.counts.not_compared_cases }}</span></div>
+  </div>
+  <p class="muted small">
+    断言：必测 {{ report.counts.required_assertions }} · 一致 {{ report.counts.matched_assertions }} ·
+    不一致 {{ report.counts.mismatched_assertions }} · 未比较 {{ report.counts.not_compared_assertions }}
+  </p>
+  {% if report.grade_eligible_reasons %}
+  <div class="reasons">
+    <h3>判定说明</h3>
+    <ul>
+      {% for reason in report.grade_eligible_reasons %}
+      <li><span class="mono tiny">{{ reason }}</span> {{ reason_labels.get(reason, '') }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>用例结果</h2></div>
+  <table class="table">
+    <thead>
+      <tr><th>用例</th><th>目的</th><th>比较</th><th>终止</th><th>协议</th><th>失败断言</th><th>备注</th></tr>
+    </thead>
+    <tbody>
+      {% for case in report.case_results %}
+      <tr>
+        <td class="mono small">{{ case.case_id }}</td>
+        <td>{{ case.purpose.value }}</td>
+        <td><span class="badge {{ case.comparison.value|lower }}">{{ case.comparison.value }}</span></td>
+        <td class="small">{{ case.termination.value }}</td>
+        <td class="small">{{ case.protocol_status.value }}</td>
+        <td class="mono tiny">{{ case.failed_assertions|join(', ') if case.failed_assertions else '—' }}</td>
+        <td class="small muted">{{ case.note or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% for case in report.case_results %}
+<details class="panel details">
+  <summary>
+    <span class="mono">{{ case.case_id }}</span>
+    <span class="badge {{ case.comparison.value|lower }}">{{ case.comparison.value }}</span>
+    <span class="muted small">{{ case.assertion_results|length }} 条断言</span>
+  </summary>
+  <table class="table">
+    <thead><tr><th>断言</th><th>算子</th><th>比较</th><th>期望</th><th>实际</th><th>说明</th></tr></thead>
+    <tbody>
+      {% for assertion in case.assertion_results %}
+      <tr>
+        <td class="mono small">{{ assertion.assertion_id }}</td>
+        <td class="mono tiny">{{ assertion.operator.value }}</td>
+        <td><span class="badge {{ assertion.comparison.value|lower }}">{{ assertion.comparison.value }}</span></td>
+        <td><code class="json">{{ assertion.expected|tojson }}</code></td>
+        <td><code class="json">{{ assertion.actual|tojson }}</code></td>
+        <td class="small muted">{{ assertion.detail or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endfor %}
+
+<section class="panel">
+  <div class="panel-head"><h2>覆盖与证据</h2></div>
+  <table class="kv">
+    <tr><th>覆盖完整</th><td>{{ '是' if report.coverage.complete else '否' }}</td></tr>
+    <tr><th>缺失分区</th><td class="mono small">{{ report.coverage.missing_partitions|join(', ') if report.coverage.missing_partitions else '—' }}</td></tr>
+    <tr><th>缺失断言</th><td class="mono small">{{ report.coverage.missing_assertions|join(', ') if report.coverage.missing_assertions else '—' }}</td></tr>
+    <tr><th>证据文件</th><td class="mono tiny">{{ report.evidence_refs|join(', ') if report.evidence_refs else '—' }}</td></tr>
+    <tr><th>运行目录</th><td class="mono tiny">data/runs/{{ report.run_id }}/</td></tr>
+  </table>
+</section>
+
+<section class="panel muted-panel">
+  <div class="panel-head"><h2>AI 诊断</h2></div>
+  <p>
+    本阶段（第 1—2 周）尚未接入 LLM。按实施方案，AI 诊断属于独立模块，
+    只会读取任务要求、学生代码、编译输出与失败信息，输出原因与修改方向，
+    并**与客观测试结果分开保存**；评分始终只由测试用例判定。
+  </p>
+  <p class="muted small">
+    当前的“失败明细”请直接看上方用例表与断言表：每条断言都给出期望值、实际观测值和证据文件，
+    足以说明问题出在哪个功能点、哪种输入上。
+  </p>
+</section>
+
+{% endblock %}
