@@ -18,15 +18,15 @@
     <span class="button primary">{{ t('modes.standard.enter') }}</span>
   </a>
 
-  <div class="mode-card disabled" aria-disabled="true">
+  <a class="mode-card" href="/llm">
     <div class="mode-head">
       <span class="mode-icon">B</span>
-      <span class="badge draft">{{ t('modes.llm.soon') }}</span>
+      <span class="badge published">{{ t('modes.llm.soon') }}</span>
     </div>
     <h2>{{ t('modes.llm.title') }} <small class="muted">{{ t('modes.llm.sub') }}</small></h2>
     <p>{{ t('modes.llm.desc') }}</p>
-    <button class="button" type="button" disabled title="{{ t('modes.llm.disabled') }}">{{ t('modes.llm.disabled') }}</button>
-  </div>
+    <span class="button primary">{{ t('modes.llm.enter') }}</span>
+  </a>
 </section>
 
 <p class="muted small mode-note">{{ t('modes.note') }}</p>

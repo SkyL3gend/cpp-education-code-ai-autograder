@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..config import data_dir
-from ..domain.enums import ComparisonStatus, CompileStatus, ProtocolStatus
+from ..domain.enums import ComparisonStatus, CompileStatus, Mode, ProtocolStatus
 from ..domain.errors import AssessorError, InvalidInputError
 from ..domain.models import AssessmentReport, Observation
 from ..judge.assertions import evaluate
@@ -159,16 +159,23 @@ def _cmd_sandbox_capabilities(args: argparse.Namespace) -> int:
 def _cmd_run(args: argparse.Namespace) -> int:
     if not args.submission and not args.variant:
         raise InvalidInputError("必须提供 --submission 或 --variant 之一")
+    mode = Mode.LLM if getattr(args, "llm", False) else Mode.STANDARD
     options = RunOptions(
         task_ref=args.task,
         submission=Path(args.submission) if args.submission else None,
+        mode=mode,
         backend=args.backend,
         allow_draft=args.allow_draft,
         allow_unattested=args.allow_unattested_backend,
         target_before=Path(args.target_before) if args.target_before else None,
         variant=args.variant,
     )
-    result = execute_standard_run(options)
+    if mode is Mode.LLM:
+        from ..orchestrator.mode_two import execute_llm_run
+
+        result = execute_llm_run(options)
+    else:
+        result = execute_standard_run(options)
     if args.json:
         _print_json(
             {
@@ -444,6 +451,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-unattested-backend",
         action="store_true",
         help="显式放行未通过能力门禁的后端（报告标记 grade_eligible=false）",
+    )
+    run_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="模式二：让模型为这份程序生成适配声明（需要 ASSESSOR_LLM_API_KEY）",
     )
     run_parser.add_argument("--json", action="store_true")
     run_parser.set_defaults(func=_cmd_run)

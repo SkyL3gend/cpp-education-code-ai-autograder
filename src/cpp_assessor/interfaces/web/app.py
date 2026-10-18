@@ -32,8 +32,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ...config import ASSESSOR_VERSION, data_dir, task_library_dir
+from ...domain.enums import Mode
 from ...domain.errors import AssessorError, InvalidInputError
 from ...domain.models import AssessmentReport, TaskCase
+from ...llm import LLMSettings
+from ...orchestrator.mode_two import execute_llm_run
 from ...orchestrator.runner import RunOptions, execute_standard_run, make_backend, new_run_id
 from ...reporting.export import CSV_COLUMNS, report_json, report_rows
 from ...selfcheck import (
@@ -349,6 +352,110 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             capabilities=capabilities,
             settings=settings,
         )
+
+    @app.get("/llm", response_class=HTMLResponse)
+    def llm_index(request: Request) -> HTMLResponse:
+        configured = LLMSettings.from_env().configured
+        return _render(
+            request,
+            templates,
+            "llm.html",
+            tasks=list_tasks(settings.library),
+            capabilities=make_backend(settings.backend).capabilities(),
+            settings=settings,
+            key_configured=configured,
+        )
+
+    @app.get("/llm/tasks/{task_ref}", response_class=HTMLResponse)
+    def llm_task_page(request: Request, task_ref: str) -> HTMLResponse:
+        try:
+            task = load_task(task_ref, task_library=settings.library, allow_draft=True)
+        except AssessorError as exc:
+            return _render(request, templates, "error.html", status_code=404, message=str(exc))
+        suite = _load_suite(settings, task_ref)
+        variants = suite.get("variants", []) if isinstance(suite, dict) else []
+        return _render(
+            request,
+            templates,
+            "task.html",
+            task=task,
+            case_rows=_case_rows(task),
+            variants=variants,
+            settings=settings,
+            llm_mode=True,
+            form_action="/llm/runs",
+            key_configured=LLMSettings.from_env().configured,
+        )
+
+    @app.post("/llm/runs")
+    async def create_llm_run(
+        task_ref: str = Form(...),
+        api_key: str = Form(""),
+        variant: str = Form(""),
+        submission: UploadFile | None = File(None),
+        target_before: UploadFile | None = File(None),
+    ) -> Response:
+        key = (api_key or "").strip()
+        try:
+            llm_settings = LLMSettings.from_env(api_key=key or None)
+        except (ValueError, InvalidInputError) as exc:  # noqa: F821 - 兼容旧版本
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not llm_settings.configured:
+            raise HTTPException(
+                status_code=400,
+                detail="LLM 模式需要 API Key：请在表单里填写，或先设置 ASSESSOR_LLM_API_KEY",
+            )
+        try:
+            task = load_task(task_ref, task_library=settings.library, allow_draft=True)
+        except AssessorError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        variant = (variant or "").strip()
+        if variant and submission is not None and submission.filename:
+            raise HTTPException(status_code=400, detail="不能同时指定参照版本和提交文件")
+        if not variant and (submission is None or not submission.filename):
+            raise HTTPException(status_code=400, detail="请上传提交文件，或选择一个参照版本")
+
+        upload_dir = app.state.upload_root / uuid.uuid4().hex
+        submission_path: Path | None = None
+        target_before_path: Path | None = None
+        try:
+            if submission is not None and submission.filename:
+                submission_path = _save_upload(submission, upload_dir, settings.max_upload_bytes)
+            if target_before is not None and target_before.filename:
+                target_before_path = _save_upload(
+                    target_before, upload_dir / "target_before", settings.max_upload_bytes
+                )
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=413 if "大" in str(exc) else 400, detail=str(exc)) from exc
+
+        run_id = new_run_id()
+        options = RunOptions(
+            task_ref=task_ref,
+            submission=submission_path,
+            variant=variant or None,
+            target_before=target_before_path,
+            mode=Mode.LLM,
+            backend=settings.backend,
+            allow_draft=settings.allow_draft,
+            allow_unattested=settings.allow_unattested,
+            data_dir=settings.data_root,
+            task_library=settings.library,
+            run_id=run_id,
+        )
+        app.state.pending[run_id] = "queued"
+
+        def job() -> None:
+            app.state.pending[run_id] = "running"
+            try:
+                execute_llm_run(options, llm_settings)
+            except BaseException as exc:  # noqa: BLE001 - 线程异常要显示在页面上
+                app.state.errors[run_id] = f"{type(exc).__name__}: {exc}"
+            finally:
+                app.state.pending.pop(run_id, None)
+
+        app.state.executor.submit(job)
+        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs", response_class=HTMLResponse)
     def runs_page(request: Request) -> HTMLResponse:

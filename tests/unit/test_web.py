@@ -62,16 +62,27 @@ def _start_variant_run(client: TestClient, variant: str = "correct") -> str:
     return location.rsplit("/", 1)[-1]
 
 
-def test_modes_page_offers_standard_and_disabled_llm(client: TestClient) -> None:
+def test_modes_page_offers_standard_and_llm(client: TestClient) -> None:
     response = client.get("/")
     assert response.status_code == 200
     body = response.text
     assert "基准模式" in body
     assert "LLM 模式" in body
-    assert "暂未开放" in body
     assert 'href="/standard"' in body
-    # LLM 模式按钮是禁用状态，没有可用链接。
-    assert 'href="/llm"' not in body
+    assert 'href="/llm"' in body
+
+
+def test_llm_page_explains_key_and_lists_tasks(client: TestClient) -> None:
+    response = client.get("/llm")
+    assert response.status_code == 200
+    body = response.text
+    assert "API Key" in body
+    assert "t1_phone_validation" in body
+    page = client.get("/llm/tasks/t1_phone_validation@1.0.0")
+    assert page.status_code == 200
+    assert 'name="api_key"' in page.text
+    assert 'action="/llm/runs"' in page.text
+    assert 'type="password"' in page.text
 
 
 def test_index_lists_tasks(client: TestClient) -> None:

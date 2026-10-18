@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ t('llm.title') }}{% endblock %}
+{% block content %}
+
+{% if settings.backend == 'mock' %}
+<div class="banner warn">
+  <strong>{{ t('index.banner.mock') }}</strong>
+</div>
+{% elif not settings.allow_unattested %}
+<div class="banner warn">
+  <strong>{{ t('index.banner.gate') }}</strong>
+</div>
+{% endif %}
+
+<section class="hero">
+  <h1>{{ t('llm.heading') }}</h1>
+  <p>{{ t('llm.intro') }}</p>
+  <p class="muted small">{{ t('llm.pipeline') }}</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ t('llm.key.section') }}</h2>
+    <span class="badge {{ 'published' if key_configured else 'draft' }}">
+      {{ t('llm.key.configured') if key_configured else t('llm.key.not_configured') }}
+    </span>
+  </div>
+  <p class="muted small">{{ t('llm.key.hint') }}</p>
+  <p class="muted tiny">{{ t('llm.key.privacy') }}</p>
+</section>
+
+<section class="grid tasks">
+  {% for task in tasks %}
+  <article class="card task-card">
+    <div class="card-head">
+      <span class="mono small">{{ task.task_id }}@{{ task.version }}</span>
+      <span class="badge {{ 'published' if task.get('publication_status') == 'PUBLISHED' else 'draft' }}">
+        {{ label('publication', task.get('publication_status', task.get('status', 'UNKNOWN'))) }}
+      </span>
+    </div>
+    <h2>{{ task.get('title', task.task_id) }}</h2>
+    <p class="muted">{{ t('index.case_count') }}: {{ task.get('case_count', '-') }}</p>
+    <a class="button" href="/llm/tasks/{{ task.task_id }}@{{ task.version }}">{{ t('llm.open') }}</a>
+  </article>
+  {% else %}
+  <p class="muted">{{ t('index.empty') }}</p>
+  {% endfor %}
+</section>
+
+<p class="small"><a class="link" href="/">← {{ t('nav.modes') }}</a></p>
+
+{% endblock %}

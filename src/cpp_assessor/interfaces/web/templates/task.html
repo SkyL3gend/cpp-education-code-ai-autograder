@@ -83,11 +83,23 @@
   </section>
 
   <section class="panel">
-    <div class="panel-head"><h2>{{ t('task.submit.title') }}</h2></div>
+    <div class="panel-head"><h2>{{ t('task.submit.title') }}</h2>
+      {% if llm_mode %}<span class="badge draft">{{ t('llm.badge') }}</span>{% endif %}
+    </div>
     <p class="muted small">{{ t('task.submit.note') }}</p>
     <p class="muted small">{{ t('task.submit.note2') }}</p>
-    <form method="post" action="/runs" enctype="multipart/form-data" class="form">
+    {% if llm_mode %}
+    <p class="muted small">{{ t('llm.task.note') }}</p>
+    {% endif %}
+    <form method="post" action="{{ form_action|default('/runs') }}" enctype="multipart/form-data" class="form">
       <input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
+      {% if llm_mode %}
+      <label class="field">
+        <span>{{ t('llm.key.label') }}</span>
+        <input type="password" name="api_key" autocomplete="off" placeholder="{{ t('llm.key.placeholder') }}">
+      </label>
+      <p class="muted tiny">{{ t('llm.key.hint') }}{% if key_configured %} {{ t('llm.key.configured') }}{% endif %}</p>
+      {% endif %}
       <label class="field">
         <span>{{ t('task.submit.file') }}</span>
         <input type="file" name="submission" accept=".zip,.cpp,.h,.hpp" required>
