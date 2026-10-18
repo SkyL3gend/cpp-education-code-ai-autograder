@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cpp-assessor"
-version = "0.5.0"
+version = "0.5.1"
 description = "面向 C++ 程序设计教学的代码小改自动测评与 AI 诊断系统（CLI + 本地 Web，模式一 + 模式二）"
 readme = "README.md"
 requires-python = ">=3.11"

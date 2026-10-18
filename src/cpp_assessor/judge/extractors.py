@@ -17,10 +17,15 @@ from typing import Any, Callable
 
 Extractor = Callable[[str, dict[str, Any]], dict[str, Any]]
 
-#: 菜单列表行：``4.[普通] 张三``（只有名字）
-_LIST_ROW = re.compile(r"^\s*(\d+)\.\[[^\]\r\n]+\]\s*(\S+)\s*$")
-#: 搜索结果行：``4.[普通] 张三 13800138000``（名字 + 电话）
-_SEARCH_ROW = re.compile(r"^\s*(\d+)\.\[[^\]\r\n]+\]\s*(\S+)\s+(\S+)\s*$")
+#: 菜单列表行：``4.[普通] 张三``（只有名字，名字里可能有空格）
+_LIST_ROW = re.compile(r"^\s*(\d+)\.\[[^\]\r\n]+\]\s*(.+?)\s*$")
+#: 搜索结果行：``4.[普通] 张三 13800138000``（名字 + 电话；名字允许空格）
+_SEARCH_ROW = re.compile(r"^\s*(\d+)\.\[[^\]\r\n]+\]\s*(.+?)\s+(\d{6,})\s*$")
+#: 另一种列表/检索格式：``  #4 张三  手机:13800138000  生日:2000-01-01``
+_HASH_ROW = re.compile(
+    r"^\s*#(\d+)\s+(.+?)\s+(?:手机|电话)\s*[:：]\s*(\d{6,})\s+生日\s*[:：]\s*"
+    r"([0-9]{4}\D{1,3}[0-9]{1,2}\D{1,3}[0-9]{1,2})\s*$"
+)
 
 _BIRTHDAY = re.compile(r"(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})")
 
@@ -49,6 +54,11 @@ def _rows(stdout: str) -> tuple[dict[str, str], dict[str, str]]:
         search = _SEARCH_ROW.match(line)
         if search:
             found.setdefault(search.group(2), search.group(3))
+            continue
+        hashed = _HASH_ROW.match(line)
+        if hashed:
+            listed.setdefault(hashed.group(2), hashed.group(1))
+            found.setdefault(hashed.group(2), hashed.group(3))
             continue
         plain = _LIST_ROW.match(line)
         if plain:
@@ -123,6 +133,139 @@ def contactbook_menu_v1(stdout: str, params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: 生日提醒行：``  [普通] 张伟  →  1990-10-18``
+_REMINDER_ROW = re.compile(r"^\s*\[[^\]\r\n]+\]\s*(\S+)\s*→")
+#: 详情块：``编号：4`` / ``姓名：张三``
+_DETAIL_ID = re.compile(r"编号\s*[：:]\s*(\d+)")
+_DETAIL_NAME = re.compile(r"姓名\s*[：:]\s*(\S+)")
+_DETAIL_PHONE = re.compile(r"(?:电话|手机)\s*[：:]\s*(\S+)")
+_DETAIL_BIRTHDAY = re.compile(r"生日\s*[：:]\s*([0-9]{4}\D{1,3}[0-9]{1,2}\D{1,3}[0-9]{1,2})")
+
+
+def _normalized_initial(params: dict[str, Any]) -> list[dict[str, Any]]:
+    initial = [dict(item) for item in (params.get("initial_contacts") or []) if isinstance(item, dict)]
+    for item in initial:
+        if "birthday" in item:
+            normalized = _parse_birthday(item["birthday"])
+            item["birthday"] = normalized or item["birthday"]
+    return initial
+
+
+def birthday_menu_v1(stdout: str, params: dict[str, Any]) -> dict[str, Any]:
+    """生日提醒菜单：观测"提醒名单里出现了谁"。
+
+    params：
+    - ``baseline_names``：程序自带演示联系人，比对时排除；
+    - ``initial_contacts``：用例声明的通讯录（宿主自动注入）；提醒不修改数据，
+      因此 ``contacts_after`` 就是这份基线。
+    """
+    baseline = {str(item) for item in (params.get("baseline_names") or [])}
+    names: list[str] = []
+    for line in stdout.splitlines():
+        reminder = _REMINDER_ROW.match(line)
+        if reminder:
+            name = reminder.group(1)
+            if name not in baseline and name not in names:
+                names.append(name)
+    return {
+        "names": names,
+        "reminded_names": names,
+        "section_present": "生日提醒" in stdout,
+        "contacts_after": _normalized_initial(params),
+        "observed_rows": len(names),
+    }
+
+
+def keyword_search_v1(stdout: str, params: dict[str, Any]) -> dict[str, Any]:
+    """按名字搜索：观测命中名单（``i.[类型] 姓名 电话`` 行），对齐到用例声明的联系人。
+
+    params：
+    - ``initial_contacts``：用例声明的通讯录（宿主自动注入）；
+    - ``baseline_names``：程序自带演示联系人，比对时排除；
+    - ``keyword``：本次搜索关键字（仅用于说明，不参与判定）。
+    """
+    baseline = {str(item) for item in (params.get("baseline_names") or [])}
+    initial = _normalized_initial(params)
+    by_name = {str(item.get("name") or ""): dict(item) for item in initial}
+    _, found = _rows(stdout)
+    matches: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    next_id = 1 + max((int(item.get("id") or 0) for item in initial), default=0)
+    for name, phone in found.items():
+        if name in baseline or name in seen:
+            continue
+        seen.add(name)
+        if name in by_name:
+            matches.append(dict(by_name[name]))
+        else:
+            matches.append({"id": next_id, "name": name, "phone": phone, "birthday": ""})
+            next_id += 1
+    return {
+        "matches": matches,
+        "search_hits": [item["name"] for item in matches],
+        "contacts_after": initial,
+        "observed_rows": len(found),
+    }
+
+
+def contact_ids_v1(stdout: str, params: dict[str, Any]) -> dict[str, Any]:
+    """详情页观测：从 ``编号：`` / ``姓名：`` 块里读编号。
+
+    params：
+    - ``initial_contacts``：用例声明的通讯录（宿主自动注入）；
+    - ``watch_names``：只关心这些名字（通常是声明的初始联系人与新增联系人）；
+    - ``id_offset``：程序编号与用例编号相差一个常数时做平移（默认 0）。
+    """
+    initial = _normalized_initial(params)
+    offset = int(params.get("id_offset") or 0)
+    watch = {str(item) for item in (params.get("watch_names") or [])}
+    if not watch:
+        watch = {str(item.get("name") or "") for item in initial}
+
+    seen: list[dict[str, Any]] = []
+    pending_id: int | None = None
+    pending: dict[str, Any] = {}
+    for line in stdout.splitlines():
+        match = _DETAIL_ID.search(line)
+        if match:
+            pending_id = int(match.group(1)) + offset
+            pending = {}
+            continue
+        match = _DETAIL_NAME.search(line)
+        if match and pending_id is not None:
+            name = match.group(1)
+            if name in watch or not watch:
+                entry = {"id": pending_id, "name": name}
+                seen.append(entry)
+                pending = entry
+            continue
+        if pending is not None:
+            match = _DETAIL_PHONE.search(line)
+            if match:
+                pending["phone"] = match.group(1)
+                continue
+            match = _DETAIL_BIRTHDAY.search(line)
+            if match:
+                pending["birthday"] = _parse_birthday(match.group(1))
+    by_name = {str(item.get("name") or ""): dict(item) for item in initial}
+    contacts = [dict(item) for item in initial]
+    names = {str(item.get("name") or "") for item in contacts}
+    for entry in seen:
+        if entry["name"] in names:
+            continue
+        item = {"id": entry["id"], "name": entry["name"], "phone": entry.get("phone", ""), "birthday": entry.get("birthday", "")}
+        contacts.append(item)
+        names.add(entry["name"])
+    id_list = sorted(entry["id"] for entry in seen)
+    return {
+        "id_list": id_list,
+        "ids": [entry["id"] for entry in seen],
+        "names": [entry["name"] for entry in seen],
+        "contacts_after": contacts,
+        "observed_rows": len(seen),
+    }
+
+
 def json_stdout_v1(stdout: str, params: dict[str, Any]) -> dict[str, Any]:
     """函数驱动：被测程序按协议在最后一行输出观测信封，取其中的 ``actual``。"""
     for line in reversed(stdout.splitlines()):
@@ -143,6 +286,24 @@ EXTRACTORS: dict[str, dict[str, Any]] = {
         "function": contactbook_menu_v1,
         "description": "通讯录菜单程序：读列表与搜索结果，得到 created / saved_phone / contacts_after",
         "produces": ["created", "saved_phone", "contacts_after", "rejected"],
+        "applies_to": "stdin_script",
+    },
+    "birthday_menu_v1": {
+        "function": birthday_menu_v1,
+        "description": "生日提醒菜单：读提醒名单，得到 names / contacts_after（提醒不改数据）",
+        "produces": ["names", "reminded_names", "section_present", "contacts_after"],
+        "applies_to": "stdin_script",
+    },
+    "keyword_search_v1": {
+        "function": keyword_search_v1,
+        "description": "按名字搜索：读搜索结果行，得到 matches（对齐到声明的联系人）/ contacts_after",
+        "produces": ["matches", "search_hits", "contacts_after"],
+        "applies_to": "stdin_script",
+    },
+    "contact_ids_v1": {
+        "function": contact_ids_v1,
+        "description": "逐个打开详情页：从编号/姓名块读 id_list / contacts_after，可用 id_offset 平移",
+        "produces": ["id_list", "ids", "names", "contacts_after"],
         "applies_to": "stdin_script",
     },
     "json_stdout_v1": {

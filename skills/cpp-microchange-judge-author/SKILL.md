@@ -50,9 +50,28 @@ description: 给定一道 C++ 小改题的任务包和一份学生程序，生�
 
 替换必须原样：不 trim、不补零、不提前校验。业务非法的输入（10 位、12 位、含字母）必须能原样送进程序。
 
-**每个用例可以有自己的剧本**：不同用例的输入可能触发不同分支（例如短号码会多问一句“是否确认继续”），在 `driver.session_by_case` 里按 `case_id` 覆盖 `session`；宿主优先用该用例的剧本，没有则退回 `session`。剧本必须与程序真实提示顺序一致，多一行/少一行都会错位。JSON 里的枚举一律用小写（`stdin_script`、`function_driver`、`bound`、`covered`），宿主对大小写宽容，但请按 schema 写。
+**每个用例可以有自己的剧本**：不同用例的输入可能触发不同分支（例如短号码会多问一句“是否确认继续”），在 `driver.session_by_case` 里按 `case_id` 覆盖 `session`；宿主优先用该用例的剧本，没有则退回 `session`。剧本必须与**目标程序**真实提示顺序一致，多一行/少一行都会错位；不要照抄本文件的示例——示例来自另一份通讯录程序，菜单层级可能完全不同（有的程序添加后直接回主菜单，有的先回添加子菜单）。JSON 里的枚举一律用小写（`stdin_script`、`function_driver`、`bound`、`covered`），宿主对大小写宽容，但请按 schema 写。
 
 程序启动时如果先问“容量/最大条数/初始化”这类问题，给一个明显大于种子数据的常数（例如 `200`），不要按当前联系人数去猜；容量小于种子数会导致添加被拒。
+
+业务非法输入可能触发程序的“重新输入”循环（例如非法日期会一直问“请重新输入”）。剧本不能停在这里：给一个固定的、合法的兜底值让程序继续走到可观测界面，然后观察程序**最终是否接受了那条非法输入**（接受本身就是缺陷证据）。只用输入里已有的字段做占位符，兜底值用字面量。
+
+菜单程序不能导入用例声明的 `initial_contacts`。如果用例声明了初始联系人（生日提醒、搜索、编号分配题常见），用 `driver.seed_session` 写一段“通过菜单新建一个联系人”的输入序列，占位符固定用：
+
+```text
+{{seed.name}}  {{seed.phone}}
+{{seed.birthday.year}}  {{seed.birthday.month}}  {{seed.birthday.day}}
+```
+
+宿主会对用例里的每个初始联系人把这段序列重复一遍，接在 `session` 前面。例如：
+
+```json
+"seed_session": ["1", "1", "{{seed.name}}", "{{seed.phone}}", "{{seed.birthday.year}} {{seed.birthday.month}} {{seed.birthday.day}}", "北京", "测试路1号", "0"]
+```
+
+`seed_session` 必须把程序新建联系人的**每一次提问**都占一行（包括“请选择联系人类型”这类中间菜单，按程序的实际顺序），最后只写一个 `0`（回到主菜单）；不要连写两个 `0`，主菜单里的 `0` 会直接退出程序。
+
+程序启动时自带的演示联系人不是用例数据，列进 `baseline_names` 排除。
 
 **FUNCTION_DRIVER**：写一个完整 C++ 文件，从 stdin 读请求信封（`protocol_version/run_id/attempt_id/case_id/operation_id/input`），解析 `input`，调用目标程序已有函数，把观测以 JSON 打到 stdout：
 
@@ -88,13 +107,19 @@ description: 给定一道 C++ 小改题的任务包和一份学生程序，生�
 
 | extractor_id | 适用程序 | 产出字段 |
 |---|---|---|
-| `contactbook_menu_v1` | 中文菜单通讯录（基准程序一族） | `created`、`saved_phone`、`rejected`、`search_hits` |
-| `birthday_menu_v1` | 生日提醒菜单 | `reminded_names`、`section_present` |
-| `contact_ids_v1` | 详情页显示“编号/姓名”的程序 | `ids`、`names` |
-| `date_rejections_v1` | 日期输入有拒绝提示的程序 | `rejection_count`、`added` |
+| `contactbook_menu_v1` | 中文菜单通讯录（添加 + 列表/搜索） | `created`、`saved_phone`、`contacts_after`、`rejected` |
+| `birthday_menu_v1` | 生日提醒菜单 | `names`、`reminded_names`、`section_present`、`contacts_after` |
+| `keyword_search_v1` | 按名字搜索菜单 | `matches`、`search_hits`、`contacts_after` |
+| `contact_ids_v1` | 详情页显示“编号/姓名”的程序 | `id_list`、`ids`、`names`、`contacts_after` |
 | `json_stdout_v1` | 直接输出标准 JSON 的程序 | 按 output schema 取字段 |
 
-提取器参数只能引用输入字段或字面量，例如 `{"probe_name": "{{candidate.name}}"}`。提取器由应用注册，你**不能**要求宿主执行你写的解析脚本。读不出来就是 `GAP`，不要用正则硬凑。
+菜单程序自带的演示联系人、以及程序启动时自动生成的种子数据，都不属于用例输入：把它们列进 `baseline_names` 排除掉。用例声明的 `initial_contacts` 由宿主自动注入提取器，你不需要手写。
+
+按题目选提取器：验证“是否添加成功/存了什么”用 `contactbook_menu_v1`；验证“生日提醒名单”用 `birthday_menu_v1`；验证“搜索命中”用 `keyword_search_v1`；验证“联系人编号”用 `contact_ids_v1`。
+
+`contact_ids_v1` 的两个参数要看程序实现后填：`watch_names` 列出要读编号的联系人；如果程序的编号起点与用例声明的初始编号差一个常数（例如程序自带 3 个种子联系人、用例初始编号从 1 开始），用 `id_offset` 做常量平移（`-3`）。注意：只有**所有**被观察联系人都能用同一个常数对齐时才这么做；声明的初始编号不连续（例如 5、9）时，常量平移不可能对齐，应当如实返回 `UNSUPPORTED` 或 `GAP`。
+
+提取器参数只能引用输入字段或字面量，例如 `{"name": "{{candidate.name}}"}`。提取器由应用注册，你**不能**要求宿主执行你写的解析脚本。读不出来就是 `GAP`，不要用正则硬凑。
 
 # 硬约束
 
@@ -131,6 +156,7 @@ description: 给定一道 C++ 小改题的任务包和一份学生程序，生�
     "session_by_case": {
       "c_short_10": ["200", "2", "1", "1", "{{candidate.name}}", "{{candidate.phone}}", "2", "{{candidate.birthday.year}} {{candidate.birthday.month}} {{candidate.birthday.day}}", "北京", "测试路1号", "0", "1", "9", "1", "{{candidate.name}}", "0", "0", "0"]
     },
+    "seed_session": ["1", "1", "{{seed.name}}", "{{seed.phone}}", "{{seed.birthday.year}} {{seed.birthday.month}} {{seed.birthday.day}}", "北京", "测试路1号"],
     "eof": true,
     "driver_source": ""
   },

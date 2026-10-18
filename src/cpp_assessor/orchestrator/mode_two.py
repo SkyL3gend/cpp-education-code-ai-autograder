@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import shutil
@@ -352,7 +353,11 @@ class ModeTwoRun:
             state.bundle = bundle
             self._persist_json("plans/target_bundle.json", bundle.model_dump())
             validation = validate_bundle(
-                bundle, task, state.files, extractor_ids=extractor_ids()
+                bundle,
+                task,
+                state.files,
+                extractor_ids=extractor_ids(),
+                case_inputs={cid: task.cases[cid].input for cid in task.task_spec.case_ids},
             )
             state.validation = validation
             state.warnings.extend(validation.warnings)
@@ -369,6 +374,10 @@ class ModeTwoRun:
             self._event(
                 "BUNDLE_INVALID", {"attempt": attempt, "problems": validation.problems[:6]}
             )
+        bundle = state.bundle
+        if bundle is not None and bundle.status == "UNSUPPORTED":
+            reason = (bundle.notes or "模型认为这个程序无法按本题契约可靠观察").strip()
+            raise AssessorError(f"这道题无法在当前程序上可靠观察：{reason}")
         detail = (
             "；".join(state.validation.problems[:4])
             if state.validation is not None
@@ -441,8 +450,13 @@ class ModeTwoRun:
                 "function_driver": "driver_source 必须能读 stdin 的请求 JSON，最后一行输出 {\"protocol_version\":\"1.0\",\"status\":\"OK\",\"actual\":{...}}",
                 "extractor_params": "observer.params 也用同一套占位符；提取器只输出事实，不做比较",
                 "observation_first": "剧本必须走到能读出事实的界面（列表/搜索/提醒/统计），只看到“添加成功”这类提示不算观测；菜单程序添加后通常要先回上一层再进查找界面",
+                "script_from_target": "剧本要按目标程序实际打印的菜单顺序逐行写：添加成功后是回主菜单还是回添加子菜单、检索是几号键、有没有类型/城市/地址等中间提问，都以目标程序的输出为准，不要照抄提示里的示例（示例来自另一份程序）",
                 "stdin_values_only": "剧本里只放输入值，不要复制程序打印的提示语（以 * 开头或以 ：结尾的字符串），否则静态校验会拒绝",
+                "script_end": "剧本最后要逐层返回并真正退出：搜索/列表界面按 0 退回上一级，回到主菜单后再按 0 退出；通常末尾需要 2~3 个 0。停在菜单上会因 stdin 结束而无限循环直到超时",
                 "startup_capacity": "程序启动时若先问容量/最大条数，给一个明显大于种子数据的常数（例如 200）；容量不足会导致添加被拒，别按当前联系人数猜",
+                "reprompt_loop": "业务非法输入若让程序进入“请重新输入”循环，剧本要给一个固定合法的兜底值让程序继续走到可观测界面；观察程序最终是否接受了那条非法输入（接受即缺陷），不要停在被循环卡住的位置",
+                "seed_initial_contacts": "菜单程序不能导入用例的 initial_contacts：如果用例声明了初始联系人，用 driver.seed_session 写一段“新建一个联系人”的输入序列，占位符固定为 {{seed.name}} / {{seed.phone}} / {{seed.birthday.year}} / {{seed.birthday.month}} / {{seed.birthday.day}}，宿主会对每个初始联系人重复一遍并接在 session 前面；seed_session 必须覆盖程序新建联系人过程中的每一次提问（中间的类型菜单也要占一行），最后只写一个 0（回主菜单），不要连写两个 0（会退出程序）；程序自带演示联系人列进 baseline_names 排除",
+                "extractor_choice": "按题目选提取器：是否添加成功/存了什么用 contactbook_menu_v1；生日提醒名单用 birthday_menu_v1；搜索命中用 keyword_search_v1；联系人编号用 contact_ids_v1；程序自带演示联系人列进 baseline_names",
                 "subject_level": "task.subject_level 描述基准工程的接口层级，不约束目标程序；目标是菜单程序时选择 stdin_script，不要因为 subject_level=FUNCTION 就返回 UNSUPPORTED",
                 "unsupported": "只有在目标程序没有任何可确定复现的 stdin 路径时才返回 status=UNSUPPORTED",
             },
@@ -483,10 +497,22 @@ class ModeTwoRun:
             shutil.rmtree(subject)
         subject.mkdir(parents=True, exist_ok=True)
         origin = state.run_dir / "submissions" / state.manifest.submission_id / "original"
+        # function_driver 自带 main()，要排除程序自己的入口；stdin_script 反而需要入口文件。
+        excluded = (
+            list(state.task.document.build.exclude_globs or [])
+            if bundle.driver.kind == "function_driver"
+            else []
+        )
         included: list[str] = []
         for entry in state.manifest.files:
             path = entry.path
             if Path(path).suffix.lower() not in _SOURCE_SUFFIXES:
+                continue
+            posix = Path(path).as_posix()
+            if any(
+                fnmatch.fnmatch(posix, pattern) or fnmatch.fnmatch(Path(posix).name, pattern)
+                for pattern in excluded
+            ):
                 continue
             target = subject / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -616,6 +642,15 @@ class ModeTwoRun:
             stdout = self._run_case_stream(case_id, case, probe=True)
         except AssessorError as exc:
             return [str(exc)]
+        outcome = self._probe_outcomes.get(case_id)
+        if outcome is not None and outcome.termination is not Termination.EXITED:
+            tail = stdout[-300:].replace("\r", "")
+            return [
+                f"程序没有正常退出（termination={outcome.termination.value}），剧本末尾缺少返回/退出步骤。"
+                "菜单程序读完事实后要逐层按 0 返回：搜索/列表界面 0 → 列表 0 → 主菜单 0；"
+                "如果停在菜单上，程序会因为标准输入结束而无限循环直到超时。"
+                f"输出末尾：{json.dumps(tail, ensure_ascii=False)}"
+            ]
         if bundle.driver.kind == "function_driver":
             parsed = parse_response(
                 stdout_text=stdout,
@@ -639,8 +674,27 @@ class ModeTwoRun:
         missing = [key for key in _expected_actual_keys(state, case_id) if key not in facts]
         if missing:
             return [f"提取器没有产出断言需要的字段：{missing}"]
+        if bundle.driver.seed_session:
+            initial = [
+                str(item.get("name") or "")
+                for item in (case.input.get("initial_contacts") or [])
+                if isinstance(item, dict)
+            ]
+            initial = [name for name in initial if name]
+            listed = {
+                str(item.get("name") or "")
+                for item in (facts.get("contacts_after") or [])
+                if isinstance(item, dict)
+            }
+            missing = [name for name in initial if name not in listed]
+            if missing:
+                return (
+                    f"种子联系人没有建成：程序里看不到 {missing}。seed_session 必须走完程序新建"
+                    "联系人时的**每一次提问**（例如“请选择联系人类型”这样的中间菜单也要占一行），"
+                    "并在最后用一个 0 回到主菜单。"
+                )
         if bundle.observer.extractor_id == "contactbook_menu_v1" and not facts.get("observed_rows"):
-            script = bundle.driver.session_by_case.get(case_id) or list(bundle.driver.session)
+            script = self._case_script(case_id, case)
             tail = stdout[-500:].replace("\r", "")
             return [
                 "剧本没有走到能读出事实的界面：输出里没有任何列表行或搜索行，"
@@ -660,9 +714,58 @@ class ModeTwoRun:
         params = _substitute(bundle.observer.params, case_input, state.warnings)
         if not isinstance(params, dict):
             params = {}
-        if bundle.observer.extractor_id == "contactbook_menu_v1" and "initial_contacts" not in params:
-            params["initial_contacts"] = case_input.get("initial_contacts") or []
+        if "initial_contacts" not in params:
+            injects = {
+                "contactbook_menu_v1",
+                "birthday_menu_v1",
+                "keyword_search_v1",
+                "contact_ids_v1",
+            }
+            if bundle.observer.extractor_id in injects:
+                params["initial_contacts"] = case_input.get("initial_contacts") or []
         return params
+
+    def _seed_lines(self, case_input: dict[str, Any]) -> list[str]:
+        """把 ``driver.seed_session`` 对用例声明的每个初始联系人展开一遍。"""
+        state = self.state
+        bundle = state.bundle
+        assert bundle is not None
+        template = list(bundle.driver.seed_session or [])
+        # 模型常把“返回上一层”和“返回主菜单”连写成两个 0；第二个 0 会直接退出程序。
+        while len(template) > 1 and str(template[-1]).strip() == "0" and str(template[-2]).strip() == "0":
+            template.pop()
+        contacts = case_input.get("initial_contacts") or []
+        if not template or not isinstance(contacts, list):
+            return []
+        lines: list[str] = []
+        for contact in contacts:
+            if not isinstance(contact, dict):
+                continue
+            birthday = contact.get("birthday")
+            birthday = birthday if isinstance(birthday, dict) else {}
+            replacements = {
+                "seed.name": contact.get("name") or "",
+                "seed.phone": contact.get("phone") or "",
+                "seed.birthday.year": birthday.get("year") or "",
+                "seed.birthday.month": birthday.get("month") or "",
+                "seed.birthday.day": birthday.get("day") or "",
+            }
+            for step in template:
+                text = str(step)
+                for key, value in replacements.items():
+                    text = text.replace("{{" + key + "}}", str(value))
+                lines.append(text)
+        return lines
+
+    def _case_script(self, case_id: str, case: Any) -> list[str]:
+        bundle = self.state.bundle
+        assert bundle is not None
+        base = list(bundle.driver.session_by_case.get(case_id) or bundle.driver.session)
+        seed = self._seed_lines(case.input)
+        if seed and base and str(base[0]).strip().isdigit():
+            # 程序启动时问的容量/握手输入在种子之前，否则种子会被当成启动输入。
+            return [base[0]] + seed + base[1:]
+        return seed + base
 
     def _run_case_stream(self, case_id: str, case: Any, *, probe: bool) -> str:
         state = self.state
@@ -674,23 +777,24 @@ class ModeTwoRun:
         work.mkdir(parents=True, exist_ok=True)
         limit = effective_limits(state.task.document.limits, getattr(case, "limits_override", None))
         if bundle.driver.kind == "stdin_script":
-            script = bundle.driver.session_by_case.get(case_id) or list(bundle.driver.session)
+            script = self._case_script(case_id, case)
             lines = [
                 str(line)
-                for line in _substitute(list(script), case.input, state.warnings)
+                for line in _substitute(script, case.input, state.warnings)
             ]
             stdin_path = work / "stdin.txt"
             stdin_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         else:
+            attempt_id = f"probe_{case_id}" if probe else f"attempt_{case_id}"
             stdin_path = work / "request.json"
             stdin_path.write_text(
                 json.dumps(
                     build_request(
-                        state.run_id,
-                        f"attempt_{case_id}",
-                        case_id,
-                        state.task.template.operation_id,
-                        case.input,
+                        run_id=state.run_id,
+                        attempt_id=attempt_id,
+                        case_id=case_id,
+                        operation_id=state.task.template.operation_id,
+                        case_input=case.input,
                     ),
                     ensure_ascii=False,
                 ),
@@ -1050,7 +1154,13 @@ class ModeTwoRun:
         bundle = self._parse_bundle(response.data)
         if bundle is None:
             return None
-        validation = validate_bundle(bundle, state.task, state.files, extractor_ids=extractor_ids())
+        validation = validate_bundle(
+            bundle,
+            state.task,
+            state.files,
+            extractor_ids=extractor_ids(),
+            case_inputs={cid: state.task.cases[cid].input for cid in state.task.task_spec.case_ids},
+        )
         if not validation.passed:
             state.warnings.extend(validation.problems)
             self._event("REPAIR_INVALID", {"problems": validation.problems[:4]})

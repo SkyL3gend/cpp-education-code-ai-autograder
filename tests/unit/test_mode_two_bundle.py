@@ -81,7 +81,13 @@ def validate(payload: dict):
 
     task = load_task(TASK_REF)
     bundle = TargetVerifierBundle.model_validate(payload)
-    return validate_bundle(bundle, task, {SOURCE: "int main() { return 0; }"}, extractor_ids=extractor_ids())
+    return validate_bundle(
+        bundle,
+        task,
+        {SOURCE: "int main() { return 0; }"},
+        extractor_ids=extractor_ids(),
+        case_inputs={cid: task.cases[cid].input for cid in task.task_spec.case_ids},
+    )
 
 
 def test_good_bundle_passes_static_validation() -> None:
@@ -103,6 +109,13 @@ def test_missing_required_binding_is_reported() -> None:
     payload["assertion_bindings"] = [payload["assertion_bindings"][0]]
     result = validate(payload)
     assert any("a_contacts" in problem for problem in result.problems)
+
+
+def test_seed_session_is_required_when_cases_declare_initial_contacts() -> None:
+    payload = base_bundle()
+    payload["observer"]["extractor_id"] = "birthday_menu_v1"
+    result = validate(payload)
+    assert any("seed_session" in problem for problem in result.problems)
 
 
 def test_session_placeholder_outside_schema_is_reported() -> None:

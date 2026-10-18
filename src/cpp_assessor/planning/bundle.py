@@ -41,6 +41,15 @@ _FORBIDDEN_DRIVER_MARKERS = (
 )
 SOURCE_SUFFIXES = {".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx"}
 
+#: ``driver.seed_session`` 里允许的占位符：宿主会对用例声明的每个初始联系人重复执行。
+SEED_PLACEHOLDERS = {
+    "seed.name",
+    "seed.phone",
+    "seed.birthday.year",
+    "seed.birthday.month",
+    "seed.birthday.day",
+}
+
 _DRIVER_KIND_ALIASES = {
     "stdin": "stdin_script",
     "menu": "stdin_script",
@@ -88,6 +97,7 @@ class DriverSpec(_Model):
     kind: Literal["stdin_script", "function_driver", "unsupported"] = "stdin_script"
     session: list[str] = Field(default_factory=list)
     session_by_case: dict[str, list[str]] = Field(default_factory=dict)
+    seed_session: list[str] = Field(default_factory=list)
     eof: bool = True
     driver_source: str = ""
     notes: str = ""
@@ -109,6 +119,11 @@ class DriverSpec(_Model):
         if not isinstance(value, dict):
             return {}
         return {str(key): list(item or []) for key, item in value.items()}
+
+    @field_validator("seed_session", mode="before")
+    @classmethod
+    def _seed_session(cls, value: Any) -> list[Any]:
+        return list(value or [])
 
     @field_validator("driver_source", mode="before")
     @classmethod
@@ -267,9 +282,19 @@ def schema_paths(schema: dict[str, Any]) -> set[str]:
             current = f"{prefix}.{name}" if prefix else name
             paths.add(current)
             visit(child, current)
+            if isinstance(child, dict):
+                visit(child.get("items"), f"{current}.0")
 
     visit(schema, "")
     return paths
+
+
+def _placeholder_known(placeholder: str, known_inputs: set[str]) -> bool:
+    """数组下标的占位符（``initial_contacts.3.name``）按 ``.0`` 归一后再比对。"""
+    if placeholder in known_inputs:
+        return True
+    normalized = re.sub(r"\.\d+(?=\.|$)", ".0", placeholder)
+    return normalized in known_inputs
 
 
 def _placeholders(text: str) -> set[str]:
@@ -282,6 +307,7 @@ def validate_bundle(
     files: dict[str, str],
     *,
     extractor_ids: set[str],
+    case_inputs: dict[str, dict[str, Any]] | None = None,
 ) -> BundleValidation:
     """宿主静态校验：LLM 的声明必须先过关，才允许编译/试跑。"""
     result = BundleValidation()
@@ -333,7 +359,7 @@ def validate_bundle(
         _check_script_lines(bundle.driver.session, "session")
         for step in bundle.driver.session:
             for placeholder in _placeholders(step):
-                if placeholder not in known_inputs:
+                if not _placeholder_known(placeholder, known_inputs):
                     result.problems.append(f"剧本占位符不在输入模板里：{{{{{placeholder}}}}}")
         known_cases = set(spec.case_ids)
         for case_id, script in bundle.driver.session_by_case.items():
@@ -344,10 +370,39 @@ def validate_bundle(
             _check_script_lines(script, case_id)
             for step in script:
                 for placeholder in _placeholders(step):
-                    if placeholder not in known_inputs:
+                    if not _placeholder_known(placeholder, known_inputs):
                         result.problems.append(
                             f"剧本占位符不在输入模板里：{{{{{placeholder}}}}}（{case_id}）"
                         )
+        if bundle.driver.seed_session:
+            for index, step in enumerate(bundle.driver.seed_session):
+                for placeholder in _placeholders(str(step)):
+                    if placeholder not in SEED_PLACEHOLDERS:
+                        result.problems.append(
+                            f"seed_session 第 {index + 1} 行占位符只允许 {sorted(SEED_PLACEHOLDERS)}："
+                            f"{{{{{placeholder}}}}}"
+                        )
+        if bundle.observer.extractor_id in {"birthday_menu_v1", "keyword_search_v1", "contact_ids_v1"}:
+            for case_id, payload in (case_inputs or {}).items():
+                initial = payload.get("initial_contacts") or []
+                names = [str(item.get("name") or "") for item in initial if isinstance(item, dict)]
+                names = [name for name in names if name]
+                if not names:
+                    continue
+                script = bundle.driver.session_by_case.get(case_id) or bundle.driver.session
+                text = "\n".join(str(line) for line in script)
+                if "initial_contacts" in text:
+                    continue
+                if bundle.driver.seed_session:
+                    continue
+                missing = [name for name in names if name not in text]
+                if missing:
+                    result.problems.append(
+                        f"用例 {case_id} 声明了初始联系人 {missing}，剧本没有先建出来；"
+                        "菜单程序无法导入初始数据，请用 driver.seed_session 写一段“建一个联系人”"
+                        "的剧本（占位符用 {{seed.name}} / {{seed.phone}} / "
+                        "{{seed.birthday.year}} 等），宿主会对每个初始联系人重复执行"
+                    )
     elif bundle.driver.kind == "function_driver":
         source = bundle.driver.driver_source or ""
         if len(source) < 60:
@@ -369,7 +424,7 @@ def validate_bundle(
     for key, value in bundle.observer.params.items():
         if isinstance(value, str):
             for placeholder in _placeholders(value):
-                if placeholder not in known_inputs:
+                if not _placeholder_known(placeholder, known_inputs):
                     result.problems.append(f"观测参数占位符不在输入模板里：{placeholder}")
 
     # 断言绑定：必需断言必须一条不漏，且不能改名
