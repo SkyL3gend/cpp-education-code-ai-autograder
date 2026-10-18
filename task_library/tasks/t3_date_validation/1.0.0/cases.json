@@ -1,0 +1,229 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "schema_version": "1.0",
+      "case_id": "c_valid_leap",
+      "rule_ids": [
+        "R2",
+        "R3"
+      ],
+      "partition_ids": [
+        "p_valid_leap"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "闰年宝宝",
+          "phone": "13800138000",
+          "birthday": {
+            "year": 2000,
+            "month": 2,
+            "day": 29
+          }
+        }
+      },
+      "expected": {
+        "created": true,
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "闰年宝宝",
+            "phone": "13800138000",
+            "birthday": "2000-02-29"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_valid_common",
+      "rule_ids": [
+        "R2",
+        "R3"
+      ],
+      "partition_ids": [
+        "p_valid_common"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "普通日期",
+          "phone": "13800138001",
+          "birthday": {
+            "year": 1990,
+            "month": 5,
+            "day": 5
+          }
+        }
+      },
+      "expected": {
+        "created": true,
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "普通日期",
+            "phone": "13800138001",
+            "birthday": "1990-05-05"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_invalid_1900_02_29",
+      "rule_ids": [
+        "R3",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_invalid_1900_02_29"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "平年二月",
+          "phone": "13800138002",
+          "birthday": {
+            "year": 1900,
+            "month": 2,
+            "day": 29
+          }
+        }
+      },
+      "expected": {
+        "created": false,
+        "contacts_after": []
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_invalid_year_low",
+      "rule_ids": [
+        "R1",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_invalid_year_low"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "年份过低",
+          "phone": "13800138003",
+          "birthday": {
+            "year": 1899,
+            "month": 5,
+            "day": 10
+          }
+        }
+      },
+      "expected": {
+        "created": false,
+        "contacts_after": []
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_invalid_year_high",
+      "rule_ids": [
+        "R1",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_invalid_year_high"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "年份过高",
+          "phone": "13800138004",
+          "birthday": {
+            "year": 2101,
+            "month": 1,
+            "day": 1
+          }
+        }
+      },
+      "expected": {
+        "created": false,
+        "contacts_after": []
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_invalid_april_31",
+      "rule_ids": [
+        "R3",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_invalid_april_31"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "四月三十一",
+          "phone": "13800138005",
+          "birthday": {
+            "year": 2023,
+            "month": 4,
+            "day": 31
+          }
+        }
+      },
+      "expected": {
+        "created": false,
+        "contacts_after": []
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    }
+  ]
+}

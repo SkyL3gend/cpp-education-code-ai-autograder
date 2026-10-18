@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0",
+  "method_id": "method_t2_birthday_today",
+  "version": "1.0.0",
+  "subject_level": "FUNCTION",
+  "rule_refs": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5"
+  ],
+  "input_partitions": [
+    {
+      "partition_id": "p_today_exact",
+      "description": "当天生日，窗口 0 天",
+      "kind": "valid",
+      "rule_ids": [
+        "R1"
+      ]
+    },
+    {
+      "partition_id": "p_today_window",
+      "description": "当天与未来 7 天内都有生日",
+      "kind": "valid",
+      "rule_ids": [
+        "R1",
+        "R2"
+      ]
+    },
+    {
+      "partition_id": "p_already_passed",
+      "description": "生日已过，应算到明年",
+      "kind": "boundary",
+      "rule_ids": [
+        "R3"
+      ]
+    },
+    {
+      "partition_id": "p_leap_day",
+      "description": "闰日 2 月 29 日的生日",
+      "kind": "boundary",
+      "rule_ids": [
+        "R1",
+        "R2"
+      ]
+    },
+    {
+      "partition_id": "p_window_edge",
+      "description": "窗口边界：距离恰好大于 days_ahead",
+      "kind": "boundary",
+      "rule_ids": [
+        "R2"
+      ]
+    },
+    {
+      "partition_id": "p_negative_window",
+      "description": "业务非法：days_ahead 为负数",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R4"
+      ]
+    }
+  ],
+  "boundary_requirements": [
+    {
+      "boundary_id": "b_zero",
+      "description": "距离 0 天（当天生日）",
+      "required_partitions": [
+        "p_today_exact"
+      ]
+    },
+    {
+      "boundary_id": "b_window",
+      "description": "窗口边界 days_ahead 与 days_ahead+1",
+      "required_partitions": [
+        "p_window_edge"
+      ]
+    },
+    {
+      "boundary_id": "b_leap",
+      "description": "闰日 2 月 29 日",
+      "required_partitions": [
+        "p_leap_day"
+      ]
+    }
+  ],
+  "setup_steps": [
+    "seed_initial_contacts"
+  ],
+  "action_steps": [
+    "birthday_reminders"
+  ],
+  "observations": [
+    "names",
+    "contacts_after"
+  ],
+  "assertions": [
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_names",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "names",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/names"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    },
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_contacts",
+      "rule_ids": [
+        "R5"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "contacts_after",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/contacts_after"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    }
+  ],
+  "coverage_requirements": {
+    "required_partitions": [
+      "p_today_exact",
+      "p_today_window",
+      "p_already_passed",
+      "p_leap_day",
+      "p_window_edge",
+      "p_negative_window"
+    ],
+    "required_assertions": [
+      "a_names",
+      "a_contacts"
+    ]
+  },
+  "reference_verifier_ref": {
+    "id": "rv_t2_birthday_today",
+    "version": "1.0.0",
+    "sha256": "73a2de87419092078fac2179b1710df45e80ded30f8aadbead71ca07b544f394"
+  },
+  "known_fault_matrix": [
+    {
+      "fault_id": "f_today_rolls_over",
+      "description": "birth <= today 时把生日推到明年，导致当天生日被漏掉",
+      "detected_by_cases": [
+        "c_today_exact",
+        "c_today_window",
+        "c_leap_day"
+      ]
+    }
+  ]
+}

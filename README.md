@@ -1,0 +1,193 @@
+# 面向 C++ 程序设计教学的代码小改自动测评与 AI 诊断系统（CLI 原型）
+
+本仓库是《双模式测评系统架构与实施方案》v0.2 的**第一步实现**：按任务书
+“第 1—2 周交付能运行 5 道小改题的 CLI 原型”的要求，完成**模式一（标准测评）**
+的完整闭环——导入提交、构建受测工程、在受限后端中执行预配置用例、用可信断言
+比对观测、生成可追溯的结构化 JSON 报告，并用参照版本完成校准。
+
+当前版本**只做模式一**：不包含 LLM 诊断、模式二（LLM 生成判断程序）与 Web 界面。
+这符合实施方案 §14 的实施顺序，也保证“正确性由测试用例判定”的底线先立起来。
+
+## 1. 已实现的功能
+
+- **题库（5 道小改题）**：以简化的通讯录工程为初始程序，每题包含功能要求、
+  初始程序、参考正确实现、已知缺陷实现、4—6 个覆盖正常与边界的用例、断言定义、
+  参照版本清单与校验和。
+- **自动测评**：编译学生提交 → 受资源限制地逐个执行用例 → 通过标准输入输出协议
+  取得结构化观测 → 按断言白名单（`EQUALS` / `MULTISET_EQUALS` / `UNCHANGED`）
+  严格比较 → 汇总为 `PASS` / `FAIL` / `INCONCLUSIVE` / `NOT_ASSESSED`。
+- **报告与证据**：每次运行生成 `objective_report.json`（含覆盖情况、用例与断言计数、
+  判定理由、执行后端与校验等级），并保留原始 stdout/stderr、观测、编译日志、
+  构建计划、校验记录，可用 `replay` 命令从证据复现判定。
+- **校准**：`tools/calibrate.py` 对每题运行“正确实现”和“已知缺陷实现”，
+  校验正确实现通过、缺陷实现被指定用例识别，并写入 SQLite 与 JSON 记录。
+- **执行后端**：本地 Win32 Job Object 受限后端（CPU/内存/进程数/墙钟/进程树终止）
+  与模拟后端（`mock`，不执行任何代码，仅用于验证状态机与报告链路）。
+- **能力门禁**：后端缺少 CPU、内存、时间、进程数、网络隔离、进程树终止、环境清理
+  中的任一必要能力时，**默认拒绝执行真实提交**（符合实施方案 §9.3）。
+
+## 2. 环境与依赖
+
+| 组件 | 版本要求 | 本机实测 |
+| --- | --- | --- |
+| Python | ≥ 3.11 | 3.12.10 |
+| pydantic | ≥ 2.6 | 2.14.1 |
+| jsonschema | ≥ 4.20 | 4.26.0 |
+| pytest（开发） | ≥ 8 | 9.1.1 |
+| g++ | 支持 C++17 | 13.2.0（MinGW-W64 x86_64-ucrt-posix-seh） |
+| 操作系统 | Windows 10/11 x64 | Windows（中文路径已验证） |
+
+说明：
+
+- 编译器通过 `PATH` 查找 `g++`；找不到时运行会在校验阶段失败并给出
+  `COMPILER_MISSING`，不会退回“在宿主直接运行”的路径。
+- 数据默认写入仓库根目录的 `data/`，可用环境变量 `ASSESSOR_HOME` 改到别处；
+  题库目录默认 `task_library/`，可用 `ASSESSOR_TASK_LIBRARY` 覆盖。
+
+## 3. 快速开始
+
+```powershell
+# 1) 安装（可编辑模式，同时安装 pytest）
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+
+# 2) 查看题库与后端能力
+python assessor.py task list
+python assessor.py sandbox capabilities --backend local
+
+# 3) 用参照版本跑一次标准测评（本机后端未过门禁，需显式放行）
+python assessor.py run --task t1_phone_validation@1.0.0 --variant correct --allow-unattested-backend
+
+# 4) 导出报告
+python assessor.py report <run_id> --format json --out report.json
+python assessor.py report <run_id> --format csv      # 默认写到 data/exports/<run_id>.csv
+
+# 5) 从证据复现判定
+python assessor.py replay <run_id>
+
+# 6) 回归测试
+python -m pytest
+python tools\calibrate.py
+```
+
+### 关于“不计入正式成绩”
+
+当前本地后端是 **Windows Job Object**：它能限制 CPU 时间、内存、进程数、墙钟时间，
+能终止整棵进程树，但**不提供网络隔离与文件系统隔离**。按实施方案 §9.3 的能力门禁，
+它不足以承载真实学生提交的正式评分。因此本机运行的报告一律：
+
+- `grade_eligible = false`
+- `grade_eligible_reasons` 含 `EXECUTION_BACKEND_NOT_ATTESTED`
+- 结论仍会给出明确的 `PASS` / `FAIL`，但界面与文档只把它视为**开发验证结论**。
+
+接入 Windows Sandbox 或固定虚拟机后端并通过门禁后，同一套流程可产出
+`grade_eligible = true` 的报告。
+
+## 4. 题库
+
+| 任务 ID | 规则（学生要修的小改题） | 操作 | 用例数 | 缺陷版本被识别 |
+| --- | --- | --- | --- | --- |
+| `t1_phone_validation` | 手机号必须是 11 位数字且以 1 开头 | `create_contact` | 4 | `c_non_digit_11` |
+| `t2_birthday_today` | 当天生日必须出现在提醒结果里 | `birthday_reminders` | 6 | `c_today_exact`、`c_today_window`、`c_leap_day` |
+| `t3_date_validation` | 生日必须是真实日期，年份 1900—2100 | `create_contact` | 6 | `c_invalid_1900_02_29`、`c_invalid_year_low`、`c_invalid_year_high` |
+| `t4_name_search` | 姓名检索不区分大小写且返回全部匹配 | `search_contact` | 5 | `c_case_insensitive`、`c_upper_keyword` |
+| `t5_id_allocation` | 删除联系人后新增，编号不得重复 | `id_allocation` | 5 | `c_delete_then_add`、`c_max_seed`、`c_multi_add` |
+
+每个任务都有 `variants/correct/`（只改必要文件的参考实现）与 `variants/faulty/`
+（初始缺陷版本），`reference_suite.json` 声明两者期望的判定；`tools/calibrate.py`
+会实际编译运行并比对，只有“正确实现 PASS、缺陷实现 FAIL 且命中指定用例”才算通过。
+当前 5 题全部校准通过。
+
+## 5. 命令参考
+
+| 命令 | 作用 |
+| --- | --- |
+| `assessor task validate <dir>` | 静态校验任务包（必填文件、Schema、引用、覆盖、参照版本、哈希） |
+| `assessor task publish <dir>` | 校验通过后把 `publication_status` 置为 `PUBLISHED` |
+| `assessor task list [--json]` | 列出题库与用例数量 |
+| `assessor sandbox capabilities [--backend local\|mock]` | 打印后端能力清单（门禁依据） |
+| `assessor run --task <id@version> (--submission <path> \| --variant <id>) [--target-before <path>] [--backend local\|mock] [--allow-draft] [--allow-unattested-backend] [--json]` | 执行一次标准测评 |
+| `assessor status <run_id> [--json]` | 查看工作流状态、判定与最近事件 |
+| `assessor cancel <run_id>` | 写入取消标记；运行器在阶段边界检查并取消 |
+| `assessor report <run_id> --format json\|csv [--out <path>]` | 导出报告；CSV 带 BOM 且做了公式注入防护 |
+| `assessor replay <run_id>` | 用保存的观测重新执行断言，与报告逐条比对 |
+
+`run` 的退出码：`0` 通过、`1` 失败、`2` 未测评、`3` 不确定、`4` 基础设施错误、
+`130` 取消。**退出码不区分是否具备正式评分资格**，资格请看报告里的 `grade_eligible`。
+
+## 6. 一次运行的产出
+
+```
+data/
+  app.sqlite3                      # 运行记录、事件、工件索引、校准记录
+  submissions/<submission_id>/     # 只读快照 + manifest.json（路径、大小、sha256、编码）
+  runs/<run_id>/
+    objective_report.json          # 结构化报告（判定唯一依据）
+    plans/build_plan.json          # 构建计划（源单元、包含目录、入口、哈希）
+    plans/test_plan.json           # 测试计划（用例、断言引用、哈希）
+    plans/validation.json          # 校验记录（九项检查与校验等级）
+    plans/requests/<case>.json     # 发给被测程序的请求信封（不含期望值）
+    generated/{subject,harness}/   # 本次构建实际使用的源码副本
+    evidence/compile/              # 编译命令结果、stdout/stderr
+    evidence/cases/<case>/         # 请求、观测、原始 stdout/stderr、工作目录
+data/exports/<run_id>.csv          # 按需导出
+data/calibrations/<task>.json      # 校准记录
+```
+
+运行目录中的 `objective_report.json` 是判定的权威来源；`assessor replay` 只读
+`evidence/`，不重新执行学生程序。
+
+## 7. 目录结构
+
+```
+src/cpp_assessor/
+  domain/       # 枚举、数据模型（pydantic）、JSON Pointer、规范化、错误类型
+  intake/       # 提交导入、路径策略、快照与哈希
+  tasks/        # 任务包加载、静态校验、发布、提交合成
+  sandbox/      # 后端接口、能力门禁、Win32 Job Object 后端、模拟后端
+  orchestrator/ # 协议信封、标准测评运行器（状态机、预算、取消）
+  judge/        # 断言引擎、覆盖计算、判定聚合
+  storage/      # SQLite、工件存储
+  reporting/    # JSON/CSV 导出
+  interfaces/   # CLI
+task_library/
+  projects/contactbook_base/1.0.0/   # 学生修改的初始工程
+  shared/harness/                    # 标准输入输出测试驱动
+  tasks/<task_id>/1.0.0/             # 题目、模板、用例、参照版本、断言定义
+tests/          # pytest 单元测试与集成测试
+tools/          # 任务包生成器、校准脚本
+docs/           # 使用手册、设计说明、实验报告
+```
+
+## 8. 安全与边界
+
+- 被测程序只在沙箱后端中执行，**没有宿主直跑后备路径**；请求文件中不含期望值。
+- 提交导入拒绝绝对路径、`..`、盘符、UNC、ADS、设备名、大小写冲突路径，
+  限制文件数与解压总量，逐块读取后落盘（不使用 `extractall`）。
+- 编译命令以参数数组调用，不经过 shell；编译选项由任务包正向声明。
+- 观测协议分两段：驱动程序只输出原始观测，宿主信任的解析器提取 `actual`，
+  比较在宿主侧完成；协议中不含 PASS/FAIL 字段。
+- 学生崩溃/超时/超内存归因为 `SUBMISSION`，报告为 `FAIL`（`SUBJECT_CRASH_OR_LIMIT`），
+  不会因“没有观测”而误判为“不确定”。
+
+## 9. 已知限制（下一步）
+
+1. **隔离等级不足**：本地 Job Object 后端无法阻断网络与文件系统访问，按门禁
+   `grade_eligible` 恒为 `false`；需接入 Windows Sandbox 或固定虚拟机后端。
+2. **只实现模式一**：LLM 诊断（任务 3）、模式二、Web 界面（任务 4）尚未开始。
+3. **题量为 5 题**：任务书要求最终 ≥10 题、每题 ≥4 用例；当前 26 个用例覆盖
+   正常与边界，第 3—4 周扩展到 10 题 40 用例。
+4. **驱动方式**：当前只支持标准输入输出型（`STDIN_SCRIPT`），函数级驱动
+   （`FUNCTION_DRIVER`）尚未实现。
+5. **模板中的动作前观测与 `UNCHANGED` 断言**已实现并有单元测试，但五个任务包
+   暂未使用；后续题库会补充“操作前后不变”的用例。
+6. **提交匹配**：学生提交按相对路径覆盖基准工程，找不到时用唯一文件名匹配；
+   生产环境应加入更严格的工程结构校验与人工复核入口。
+
+## 10. 文档
+
+- [使用手册](docs/使用手册.md)：安装、命令、任务包制作、报告解读、故障排查。
+- [设计说明](docs/设计说明.md)：模块职责、数据契约、协议、状态机、判定规则、
+  与实施方案 v0.2 的对应关系及本原型的简化点。
+- [实验报告](docs/实验报告.md)：环境、方法、五题校准数据、异常场景验证与结论。

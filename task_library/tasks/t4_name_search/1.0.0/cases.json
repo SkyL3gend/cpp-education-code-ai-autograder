@@ -1,0 +1,417 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "schema_version": "1.0",
+      "case_id": "c_case_insensitive",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3"
+      ],
+      "partition_ids": [
+        "p_case_insensitive"
+      ],
+      "assertion_ids": [
+        "a_matches",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 3
+            }
+          }
+        ],
+        "keyword": "an"
+      },
+      "expected": {
+        "matches": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": "1990-01-02"
+          }
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": "1990-01-02"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-01-03"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_chinese",
+      "rule_ids": [
+        "R1",
+        "R3"
+      ],
+      "partition_ids": [
+        "p_chinese"
+      ],
+      "assertion_ids": [
+        "a_matches",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 3
+            }
+          }
+        ],
+        "keyword": "王"
+      },
+      "expected": {
+        "matches": [
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-01-03"
+          }
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": "1990-01-02"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-01-03"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_upper_keyword",
+      "rule_ids": [
+        "R2",
+        "R3"
+      ],
+      "partition_ids": [
+        "p_upper_keyword"
+      ],
+      "assertion_ids": [
+        "a_matches",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 3
+            }
+          }
+        ],
+        "keyword": "LIU"
+      },
+      "expected": {
+        "matches": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": "1990-01-01"
+          }
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": "1990-01-02"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-01-03"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_empty_keyword",
+      "rule_ids": [
+        "R4"
+      ],
+      "partition_ids": [
+        "p_empty_keyword"
+      ],
+      "assertion_ids": [
+        "a_matches",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 3
+            }
+          }
+        ],
+        "keyword": ""
+      },
+      "expected": {
+        "matches": [],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": "1990-01-02"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-01-03"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_no_match",
+      "rule_ids": [
+        "R1",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_no_match"
+      ],
+      "assertion_ids": [
+        "a_matches",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 3
+            }
+          }
+        ],
+        "keyword": "zzz"
+      },
+      "expected": {
+        "matches": [],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "Anna Liu",
+            "phone": "13800138001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 2,
+            "name": "annabel",
+            "phone": "13800138002",
+            "birthday": "1990-01-02"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-01-03"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "schema_version": "1.0",
+      "case_id": "c_valid_11_ascii",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3"
+      ],
+      "partition_ids": [
+        "p_valid_11_ascii"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "张三",
+          "phone": "13800138000",
+          "birthday": {
+            "year": 2000,
+            "month": 1,
+            "day": 1
+          }
+        }
+      },
+      "expected": {
+        "created": true,
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "张三",
+            "phone": "13800138000",
+            "birthday": "2000-01-01"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_short_10",
+      "rule_ids": [
+        "R1",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_short_10"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "李四",
+          "phone": "1380013800",
+          "birthday": {
+            "year": 2000,
+            "month": 2,
+            "day": 2
+          }
+        }
+      },
+      "expected": {
+        "created": false,
+        "contacts_after": []
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_long_12",
+      "rule_ids": [
+        "R1",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_long_12"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "candidate": {
+          "name": "王五",
+          "phone": "138001380000",
+          "birthday": {
+            "year": 2000,
+            "month": 3,
+            "day": 3
+          }
+        }
+      },
+      "expected": {
+        "created": false,
+        "contacts_after": []
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_non_digit_11",
+      "rule_ids": [
+        "R3",
+        "R4"
+      ],
+      "partition_ids": [
+        "p_non_digit_11"
+      ],
+      "assertion_ids": [
+        "a_created",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 7,
+            "name": "已有联系人",
+            "phone": "13900139000",
+            "birthday": {
+              "year": 1995,
+              "month": 5,
+              "day": 5
+            }
+          }
+        ],
+        "candidate": {
+          "name": "赵六",
+          "phone": "1380013800a",
+          "birthday": {
+            "year": 2000,
+            "month": 4,
+            "day": 4
+          }
+        }
+      },
+      "expected": {
+        "created": false,
+        "contacts_after": [
+          {
+            "id": 7,
+            "name": "已有联系人",
+            "phone": "13900139000",
+            "birthday": "1995-05-05"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "schema_version": "1.0",
+  "method_id": "method_t3_date_validation",
+  "version": "1.0.0",
+  "subject_level": "FUNCTION",
+  "rule_refs": [
+    "R1",
+    "R2",
+    "R3",
+    "R4"
+  ],
+  "input_partitions": [
+    {
+      "partition_id": "p_valid_leap",
+      "description": "合法：闰年 2 月 29 日",
+      "kind": "valid",
+      "rule_ids": [
+        "R3"
+      ]
+    },
+    {
+      "partition_id": "p_valid_common",
+      "description": "合法：普通日期",
+      "kind": "valid",
+      "rule_ids": [
+        "R2",
+        "R3"
+      ]
+    },
+    {
+      "partition_id": "p_invalid_1900_02_29",
+      "description": "业务非法：1900 年不是闰年，2 月 29 日不存在",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R3",
+        "R4"
+      ]
+    },
+    {
+      "partition_id": "p_invalid_year_low",
+      "description": "业务非法：年份低于 1900",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R1",
+        "R4"
+      ]
+    },
+    {
+      "partition_id": "p_invalid_year_high",
+      "description": "业务非法：年份高于 2100",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R1",
+        "R4"
+      ]
+    },
+    {
+      "partition_id": "p_invalid_april_31",
+      "description": "业务非法：4 月没有 31 日",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R3",
+        "R4"
+      ]
+    }
+  ],
+  "boundary_requirements": [
+    {
+      "boundary_id": "b_leap_year",
+      "description": "闰年边界：1900 / 2000",
+      "required_partitions": [
+        "p_valid_leap",
+        "p_invalid_1900_02_29"
+      ]
+    },
+    {
+      "boundary_id": "b_year_range",
+      "description": "年份范围边界：1899 / 2101",
+      "required_partitions": [
+        "p_invalid_year_low",
+        "p_invalid_year_high"
+      ]
+    },
+    {
+      "boundary_id": "b_month_length",
+      "description": "月份天数边界：4 月 31 日",
+      "required_partitions": [
+        "p_invalid_april_31"
+      ]
+    }
+  ],
+  "setup_steps": [
+    "seed_initial_contacts"
+  ],
+  "action_steps": [
+    "create_contact"
+  ],
+  "observations": [
+    "created",
+    "contacts_after"
+  ],
+  "assertions": [
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_created",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "operator": "EQUALS",
+      "actual_observation_key": "created",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/created"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    },
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_contacts",
+      "rule_ids": [
+        "R4"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "contacts_after",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/contacts_after"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    }
+  ],
+  "coverage_requirements": {
+    "required_partitions": [
+      "p_valid_leap",
+      "p_valid_common",
+      "p_invalid_1900_02_29",
+      "p_invalid_year_low",
+      "p_invalid_year_high",
+      "p_invalid_april_31"
+    ],
+    "required_assertions": [
+      "a_created",
+      "a_contacts"
+    ]
+  },
+  "reference_verifier_ref": {
+    "id": "rv_t3_date_validation",
+    "version": "1.0.0",
+    "sha256": "198641749bc77b2cef3dbd8bf215f319e339ad5c3582b32a93b82b811e54d42f"
+  },
+  "known_fault_matrix": [
+    {
+      "fault_id": "f_feb_always_29",
+      "description": "2 月一律允许 29 日，未按闰年判断",
+      "detected_by_cases": [
+        "c_invalid_1900_02_29"
+      ]
+    },
+    {
+      "fault_id": "f_year_unbounded",
+      "description": "未限制年份范围 1900—2100",
+      "detected_by_cases": [
+        "c_invalid_year_low",
+        "c_invalid_year_high"
+      ]
+    }
+  ]
+}

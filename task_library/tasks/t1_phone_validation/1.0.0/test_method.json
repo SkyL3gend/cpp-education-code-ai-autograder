@@ -1,0 +1,137 @@
+{
+  "schema_version": "1.0",
+  "method_id": "method_t1_phone_validation",
+  "version": "1.0.0",
+  "subject_level": "FUNCTION",
+  "rule_refs": [
+    "R1",
+    "R2",
+    "R3",
+    "R4"
+  ],
+  "input_partitions": [
+    {
+      "partition_id": "p_valid_11_ascii",
+      "description": "合法：11 位、以 1 开头、全数字",
+      "kind": "valid",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3"
+      ]
+    },
+    {
+      "partition_id": "p_short_10",
+      "description": "边界：10 位手机号",
+      "kind": "boundary",
+      "rule_ids": [
+        "R1"
+      ]
+    },
+    {
+      "partition_id": "p_long_12",
+      "description": "边界：12 位手机号",
+      "kind": "boundary",
+      "rule_ids": [
+        "R1"
+      ]
+    },
+    {
+      "partition_id": "p_non_digit_11",
+      "description": "业务非法：11 位但含非数字字符",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R3",
+        "R4"
+      ]
+    }
+  ],
+  "boundary_requirements": [
+    {
+      "boundary_id": "b_length",
+      "description": "长度边界：10 / 11 / 12",
+      "required_partitions": [
+        "p_short_10",
+        "p_long_12"
+      ]
+    },
+    {
+      "boundary_id": "b_digit_class",
+      "description": "字符类别边界：数字与非数字混排",
+      "required_partitions": [
+        "p_non_digit_11"
+      ]
+    }
+  ],
+  "setup_steps": [
+    "seed_initial_contacts"
+  ],
+  "action_steps": [
+    "create_contact"
+  ],
+  "observations": [
+    "created",
+    "contacts_after"
+  ],
+  "assertions": [
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_created",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "operator": "EQUALS",
+      "actual_observation_key": "created",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/created"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    },
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_contacts",
+      "rule_ids": [
+        "R4"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "contacts_after",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/contacts_after"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    }
+  ],
+  "coverage_requirements": {
+    "required_partitions": [
+      "p_valid_11_ascii",
+      "p_short_10",
+      "p_long_12",
+      "p_non_digit_11"
+    ],
+    "required_assertions": [
+      "a_created",
+      "a_contacts"
+    ]
+  },
+  "reference_verifier_ref": {
+    "id": "rv_t1_phone_validation",
+    "version": "1.0.0",
+    "sha256": "cbb0597a33c90f42719dec4c3ac39d2457cbdfd9cd18a2933ba9dc0060236a9a"
+  },
+  "known_fault_matrix": [
+    {
+      "fault_id": "f_digit_not_checked",
+      "description": "只校验长度与首位，未校验后 10 位是否为数字",
+      "detected_by_cases": [
+        "c_non_digit_11"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0",
+  "method_id": "method_t5_id_allocation",
+  "version": "1.0.0",
+  "subject_level": "FUNCTION",
+  "rule_refs": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5"
+  ],
+  "input_partitions": [
+    {
+      "partition_id": "p_delete_then_add",
+      "description": "删除中间编号后再新增",
+      "kind": "valid",
+      "rule_ids": [
+        "R1",
+        "R2"
+      ]
+    },
+    {
+      "partition_id": "p_empty_book",
+      "description": "空通讯录新增",
+      "kind": "valid",
+      "rule_ids": [
+        "R1"
+      ]
+    },
+    {
+      "partition_id": "p_max_seed",
+      "description": "现有编号不连续且最大值大于条数",
+      "kind": "boundary",
+      "rule_ids": [
+        "R1"
+      ]
+    },
+    {
+      "partition_id": "p_delete_nonexistent",
+      "description": "业务非法：删除不存在的编号",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R4"
+      ]
+    },
+    {
+      "partition_id": "p_multi_add",
+      "description": "删除后连续新增两个",
+      "kind": "boundary",
+      "rule_ids": [
+        "R2",
+        "R3"
+      ]
+    }
+  ],
+  "boundary_requirements": [
+    {
+      "boundary_id": "b_gap",
+      "description": "编号有空隙时的最大值边界",
+      "required_partitions": [
+        "p_max_seed"
+      ]
+    },
+    {
+      "boundary_id": "b_multi",
+      "description": "连续新增的递增性",
+      "required_partitions": [
+        "p_multi_add"
+      ]
+    }
+  ],
+  "setup_steps": [
+    "seed_initial_contacts"
+  ],
+  "action_steps": [
+    "id_allocation"
+  ],
+  "observations": [
+    "id_list",
+    "contacts_after"
+  ],
+  "assertions": [
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_id_list",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3"
+      ],
+      "operator": "EQUALS",
+      "actual_observation_key": "id_list",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/id_list"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    },
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_contacts",
+      "rule_ids": [
+        "R5"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "contacts_after",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/contacts_after"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    }
+  ],
+  "coverage_requirements": {
+    "required_partitions": [
+      "p_delete_then_add",
+      "p_empty_book",
+      "p_max_seed",
+      "p_delete_nonexistent",
+      "p_multi_add"
+    ],
+    "required_assertions": [
+      "a_id_list",
+      "a_contacts"
+    ]
+  },
+  "reference_verifier_ref": {
+    "id": "rv_t5_id_allocation",
+    "version": "1.0.0",
+    "sha256": "99c21bb366a503a8c81705016b3562d2a181926deddf6a395976abd5e2cb058c"
+  },
+  "known_fault_matrix": [
+    {
+      "fault_id": "f_size_plus_one",
+      "description": "用 contacts_.size() + 1 分配编号，删除后产生重复",
+      "detected_by_cases": [
+        "c_delete_then_add",
+        "c_max_seed",
+        "c_multi_add"
+      ]
+    }
+  ]
+}

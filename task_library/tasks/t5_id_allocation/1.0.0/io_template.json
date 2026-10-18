@@ -1,0 +1,252 @@
+{
+  "schema_version": "1.0",
+  "template_id": "tpl_t5_id_allocation",
+  "version": "1.0.0",
+  "operation_id": "id_allocation",
+  "subject_level": "FUNCTION",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "initial_contacts",
+      "ops"
+    ],
+    "properties": {
+      "initial_contacts": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/contact"
+        }
+      },
+      "ops": {
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "name",
+                "phone",
+                "birthday"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "add"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "phone": {
+                  "type": "string"
+                },
+                "birthday": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "year",
+                    "month",
+                    "day"
+                  ],
+                  "properties": {
+                    "year": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9999
+                    },
+                    "month": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 12
+                    },
+                    "day": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 31
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "id"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "delete"
+                },
+                "id": {
+                  "type": "integer"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "$defs": {
+      "contact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "phone",
+          "birthday"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "birthday": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "year",
+              "month",
+              "day"
+            ],
+            "properties": {
+              "year": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9999
+              },
+              "month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id_list",
+      "contacts_after"
+    ],
+    "properties": {
+      "id_list": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      },
+      "contacts_after": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/contact"
+        }
+      }
+    },
+    "$defs": {
+      "contact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "phone",
+          "birthday"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "birthday": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          }
+        }
+      }
+    }
+  },
+  "field_semantics": {
+    "initial_contacts": "动作开始前通讯录中已有的联系人，id 按给定值写入。",
+    "ops": "按顺序执行的动作列表：add 新增、delete 按编号删除。",
+    "id_list": "全部动作执行完后的编号列表，按存储顺序。",
+    "contacts_after": "全部动作执行完后的完整通讯录投影。"
+  },
+  "preconditions": [
+    "通讯录可以先写入 initial_contacts",
+    "ops 按给定顺序执行"
+  ],
+  "steps": {
+    "setup": [
+      {
+        "step_id": "seed_initial_contacts",
+        "action": "seed_contacts"
+      }
+    ],
+    "action": [
+      {
+        "step_id": "invoke_operation",
+        "action": "id_allocation"
+      }
+    ],
+    "observe": [
+      {
+        "step_id": "read_id_list",
+        "action": "read_json_field",
+        "pointer": "/id_list"
+      },
+      {
+        "step_id": "read_contacts_after",
+        "action": "read_json_field",
+        "pointer": "/contacts_after"
+      }
+    ],
+    "teardown": []
+  },
+  "pre_operations": [],
+  "required_observations": [
+    "id_list",
+    "contacts_after"
+  ],
+  "allowed_transforms": [
+    "identity_v1"
+  ],
+  "encoding": "utf-8",
+  "exit_contract": {
+    "success_exit_codes": [
+      0
+    ],
+    "observation_channel": "stdout_line"
+  },
+  "capability_requirements": {
+    "needs_cpu_limit": true,
+    "needs_memory_limit": true,
+    "needs_wall_timeout": true,
+    "needs_process_tree_kill": true,
+    "needs_network_block": true
+  }
+}

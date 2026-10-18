@@ -1,0 +1,155 @@
+{
+  "schema_version": "1.0",
+  "method_id": "method_t4_name_search",
+  "version": "1.0.0",
+  "subject_level": "FUNCTION",
+  "rule_refs": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5"
+  ],
+  "input_partitions": [
+    {
+      "partition_id": "p_case_insensitive",
+      "description": "两个联系人都含小写关键字，但姓名大小写不同",
+      "kind": "valid",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3"
+      ]
+    },
+    {
+      "partition_id": "p_chinese",
+      "description": "中文姓名子串匹配",
+      "kind": "valid",
+      "rule_ids": [
+        "R1",
+        "R3"
+      ]
+    },
+    {
+      "partition_id": "p_upper_keyword",
+      "description": "边界：全大写关键字",
+      "kind": "boundary",
+      "rule_ids": [
+        "R2"
+      ]
+    },
+    {
+      "partition_id": "p_empty_keyword",
+      "description": "业务非法：空关键字",
+      "kind": "business_invalid",
+      "rule_ids": [
+        "R4"
+      ]
+    },
+    {
+      "partition_id": "p_no_match",
+      "description": "边界：无任何匹配",
+      "kind": "boundary",
+      "rule_ids": [
+        "R1"
+      ]
+    }
+  ],
+  "boundary_requirements": [
+    {
+      "boundary_id": "b_empty",
+      "description": "空关键字",
+      "required_partitions": [
+        "p_empty_keyword"
+      ]
+    },
+    {
+      "boundary_id": "b_case",
+      "description": "大小写组合",
+      "required_partitions": [
+        "p_case_insensitive",
+        "p_upper_keyword"
+      ]
+    }
+  ],
+  "setup_steps": [
+    "seed_initial_contacts"
+  ],
+  "action_steps": [
+    "search_contact"
+  ],
+  "observations": [
+    "matches",
+    "contacts_after"
+  ],
+  "assertions": [
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_matches",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "matches",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/matches"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    },
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_contacts",
+      "rule_ids": [
+        "R5"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "contacts_after",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/contacts_after"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    }
+  ],
+  "coverage_requirements": {
+    "required_partitions": [
+      "p_case_insensitive",
+      "p_chinese",
+      "p_upper_keyword",
+      "p_empty_keyword",
+      "p_no_match"
+    ],
+    "required_assertions": [
+      "a_matches",
+      "a_contacts"
+    ]
+  },
+  "reference_verifier_ref": {
+    "id": "rv_t4_name_search",
+    "version": "1.0.0",
+    "sha256": "0ec821afd8465ecaa4a897fed18d0e8d9e846a3902e5e0d02ff90413cc53e0ee"
+  },
+  "known_fault_matrix": [
+    {
+      "fault_id": "f_case_sensitive",
+      "description": "使用 std::string::find 直接比较，区分大小写",
+      "detected_by_cases": [
+        "c_case_insensitive",
+        "c_upper_keyword"
+      ]
+    },
+    {
+      "fault_id": "f_first_only",
+      "description": "命中第一个后 break，未返回全部匹配",
+      "detected_by_cases": [
+        "c_case_insensitive"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,506 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "schema_version": "1.0",
+      "case_id": "c_today_exact",
+      "rule_ids": [
+        "R1",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_today_exact"
+      ],
+      "assertion_ids": [
+        "a_names",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 18
+            }
+          },
+          {
+            "id": 2,
+            "name": "李娜",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 12,
+              "day": 1
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 17
+            }
+          },
+          {
+            "id": 4,
+            "name": "钱七",
+            "phone": "13800138004",
+            "birthday": {
+              "year": 1992,
+              "month": 2,
+              "day": 29
+            }
+          },
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": {
+              "year": 1991,
+              "month": 10,
+              "day": 25
+            }
+          }
+        ],
+        "today": {
+          "year": 2026,
+          "month": 10,
+          "day": 18
+        },
+        "days_ahead": 0
+      },
+      "expected": {
+        "names": [
+          "张伟"
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": "1990-10-18"
+          },
+          {
+            "id": 2,
+            "name": "李娜",
+            "phone": "13800138002",
+            "birthday": "1990-12-01"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-10-17"
+          },
+          {
+            "id": 4,
+            "name": "钱七",
+            "phone": "13800138004",
+            "birthday": "1992-02-29"
+          },
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": "1991-10-25"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_today_window",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_today_window"
+      ],
+      "assertion_ids": [
+        "a_names",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 18
+            }
+          },
+          {
+            "id": 2,
+            "name": "李娜",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 12,
+              "day": 1
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 17
+            }
+          },
+          {
+            "id": 4,
+            "name": "钱七",
+            "phone": "13800138004",
+            "birthday": {
+              "year": 1992,
+              "month": 2,
+              "day": 29
+            }
+          },
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": {
+              "year": 1991,
+              "month": 10,
+              "day": 25
+            }
+          }
+        ],
+        "today": {
+          "year": 2026,
+          "month": 10,
+          "day": 18
+        },
+        "days_ahead": 7
+      },
+      "expected": {
+        "names": [
+          "张伟",
+          "周八"
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": "1990-10-18"
+          },
+          {
+            "id": 2,
+            "name": "李娜",
+            "phone": "13800138002",
+            "birthday": "1990-12-01"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-10-17"
+          },
+          {
+            "id": 4,
+            "name": "钱七",
+            "phone": "13800138004",
+            "birthday": "1992-02-29"
+          },
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": "1991-10-25"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_already_passed",
+      "rule_ids": [
+        "R3",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_already_passed"
+      ],
+      "assertion_ids": [
+        "a_names",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 17
+            }
+          }
+        ],
+        "today": {
+          "year": 2026,
+          "month": 10,
+          "day": 18
+        },
+        "days_ahead": 7
+      },
+      "expected": {
+        "names": [],
+        "contacts_after": [
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-10-17"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_leap_day",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_leap_day"
+      ],
+      "assertion_ids": [
+        "a_names",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 18
+            }
+          },
+          {
+            "id": 2,
+            "name": "李娜",
+            "phone": "13800138002",
+            "birthday": {
+              "year": 1990,
+              "month": 12,
+              "day": 1
+            }
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 17
+            }
+          },
+          {
+            "id": 4,
+            "name": "钱七",
+            "phone": "13800138004",
+            "birthday": {
+              "year": 1992,
+              "month": 2,
+              "day": 29
+            }
+          },
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": {
+              "year": 1991,
+              "month": 10,
+              "day": 25
+            }
+          }
+        ],
+        "today": {
+          "year": 2024,
+          "month": 2,
+          "day": 29
+        },
+        "days_ahead": 1
+      },
+      "expected": {
+        "names": [
+          "钱七"
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": "1990-10-18"
+          },
+          {
+            "id": 2,
+            "name": "李娜",
+            "phone": "13800138002",
+            "birthday": "1990-12-01"
+          },
+          {
+            "id": 3,
+            "name": "王强",
+            "phone": "13800138003",
+            "birthday": "1990-10-17"
+          },
+          {
+            "id": 4,
+            "name": "钱七",
+            "phone": "13800138004",
+            "birthday": "1992-02-29"
+          },
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": "1991-10-25"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_window_edge",
+      "rule_ids": [
+        "R2",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_window_edge"
+      ],
+      "assertion_ids": [
+        "a_names",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": {
+              "year": 1991,
+              "month": 10,
+              "day": 25
+            }
+          }
+        ],
+        "today": {
+          "year": 2026,
+          "month": 10,
+          "day": 18
+        },
+        "days_ahead": 6
+      },
+      "expected": {
+        "names": [],
+        "contacts_after": [
+          {
+            "id": 5,
+            "name": "周八",
+            "phone": "13800138005",
+            "birthday": "1991-10-25"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_negative_window",
+      "rule_ids": [
+        "R4",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_negative_window"
+      ],
+      "assertion_ids": [
+        "a_names",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": {
+              "year": 1990,
+              "month": 10,
+              "day": 18
+            }
+          }
+        ],
+        "today": {
+          "year": 2026,
+          "month": 10,
+          "day": 18
+        },
+        "days_ahead": -1
+      },
+      "expected": {
+        "names": [],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "张伟",
+            "phone": "13800138001",
+            "birthday": "1990-10-18"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    }
+  ]
+}

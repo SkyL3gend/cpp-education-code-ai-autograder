@@ -1,0 +1,189 @@
+"""领域枚举。
+
+命名与架构实施方案 §7 保持一致：数据库与报告中一律保存枚举的字符串值，
+避免在存储层出现 Python 私有表示。
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class Mode(StrEnum):
+    STANDARD = "standard"
+    LLM = "llm"
+
+
+class PublicationStatus(StrEnum):
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+
+
+class OracleStatus(StrEnum):
+    UNCONFIRMED = "UNCONFIRMED"
+    CONFIRMED = "CONFIRMED"
+
+
+class CasePurpose(StrEnum):
+    PROBE = "PROBE"
+    CALIBRATION = "CALIBRATION"
+    ASSESSMENT = "ASSESSMENT"
+
+
+class DriverKind(StrEnum):
+    STDIN_SCRIPT = "STDIN_SCRIPT"
+    FUNCTION_DRIVER = "FUNCTION_DRIVER"
+
+
+class ObserverKind(StrEnum):
+    TRUSTED_EXTRACTOR = "TRUSTED_EXTRACTOR"
+    IN_PROCESS = "IN_PROCESS"
+    GENERATED_FILE_OBSERVER = "GENERATED_FILE_OBSERVER"
+
+
+class SubjectLevel(StrEnum):
+    FUNCTION = "FUNCTION"
+    WORKFLOW = "WORKFLOW"
+
+
+class Operator(StrEnum):
+    EQUALS = "EQUALS"
+    MULTISET_EQUALS = "MULTISET_EQUALS"
+    UNCHANGED = "UNCHANGED"
+
+
+class ExpectedSourceKind(StrEnum):
+    CASE_EXPECTED = "CASE_EXPECTED"
+    PRE_OBSERVATION = "PRE_OBSERVATION"
+
+
+class BindingRole(StrEnum):
+    SETUP = "SETUP"
+    INPUT = "INPUT"
+    ACTION = "ACTION"
+    OUTPUT = "OUTPUT"
+    TEARDOWN = "TEARDOWN"
+
+
+class BindingStatus(StrEnum):
+    MAPPED = "MAPPED"
+    UNMAPPED = "UNMAPPED"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+class SourceOrigin(StrEnum):
+    SUBMISSION = "SUBMISSION"
+    GENERATED = "GENERATED"
+    REFERENCE = "REFERENCE"
+
+
+class BuildRole(StrEnum):
+    ORIGINAL = "ORIGINAL"
+    DRIVER = "DRIVER"
+    OBSERVER = "OBSERVER"
+
+
+class ExecutionStatus(StrEnum):
+    COMPLETED = "COMPLETED"
+    INVALID_INPUT = "INVALID_INPUT"
+    BUILD_UNRESOLVED = "BUILD_UNRESOLVED"
+    SUBMISSION_COMPILE_ERROR = "SUBMISSION_COMPILE_ERROR"
+    ADAPTATION_FAILED = "ADAPTATION_FAILED"
+    LLM_UNAVAILABLE = "LLM_UNAVAILABLE"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    INFRA_ERROR = "INFRA_ERROR"
+    CANCELLED = "CANCELLED"
+    UNSUPPORTED = "UNSUPPORTED"
+
+
+class Termination(StrEnum):
+    EXITED = "EXITED"
+    WALL_TIME_LIMIT = "WALL_TIME_LIMIT"
+    CPU_TIME_LIMIT = "CPU_TIME_LIMIT"
+    MEMORY_LIMIT = "MEMORY_LIMIT"
+    PROCESS_LIMIT = "PROCESS_LIMIT"
+    OUTPUT_LIMIT = "OUTPUT_LIMIT"
+    DISK_LIMIT = "DISK_LIMIT"
+    CRASH = "CRASH"
+    CANCELLED = "CANCELLED"
+    INFRA_ERROR = "INFRA_ERROR"
+    NOT_RUN = "NOT_RUN"
+
+
+class ProtocolStatus(StrEnum):
+    OK = "OK"
+    MISSING = "MISSING"
+    INVALID = "INVALID"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class ComparisonStatus(StrEnum):
+    MATCH = "MATCH"
+    MISMATCH = "MISMATCH"
+    NOT_COMPARED = "NOT_COMPARED"
+
+
+class OverallStatus(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    INCONCLUSIVE = "INCONCLUSIVE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class FaultOwner(StrEnum):
+    NONE = "NONE"
+    SUBMISSION = "SUBMISSION"
+    ADAPTER = "ADAPTER"
+    INFRA = "INFRA"
+    UNKNOWN = "UNKNOWN"
+
+
+class CompileStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    COMPILER_ERROR = "COMPILER_ERROR"
+    RESOURCE_LIMIT = "RESOURCE_LIMIT"
+    INFRA_ERROR = "INFRA_ERROR"
+    CANCELLED = "CANCELLED"
+
+
+class WorkflowState(StrEnum):
+    CREATED = "CREATED"
+    INGESTING = "INGESTING"
+    ANALYZING = "ANALYZING"
+    RESOLVING_TASK = "RESOLVING_TASK"
+    BUILD_PLANNING = "BUILD_PLANNING"
+    ADAPTING = "ADAPTING"
+    VALIDATING = "VALIDATING"
+    PROBING = "PROBING"
+    CALIBRATING = "CALIBRATING"
+    FROZEN = "FROZEN"
+    EXECUTING = "EXECUTING"
+    REPORTING = "REPORTING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class IsolationLevel(StrEnum):
+    NONE = "NONE"
+    HOST_PROCESS = "HOST_PROCESS"
+    WINDOWS_SANDBOX = "WINDOWS_SANDBOX"
+    VM = "VM"
+
+
+class ValidationLevel(StrEnum):
+    UNVERIFIED = "UNVERIFIED"
+    CHECKED = "CHECKED"
+    CALIBRATED = "CALIBRATED"
+    REVIEWED = "REVIEWED"
+
+
+class VariantRole(StrEnum):
+    CORRECT = "CORRECT"
+    FAULTY = "FAULTY"
+
+
+class ExecutionBackendKind(StrEnum):
+    LOCAL_WIN32_JOB = "local_win32_job"
+    MOCK = "mock"
+    WINDOWS_SANDBOX = "windows_sandbox"

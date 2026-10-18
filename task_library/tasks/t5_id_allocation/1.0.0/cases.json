@@ -1,0 +1,412 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "schema_version": "1.0",
+      "case_id": "c_delete_then_add",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_delete_then_add"
+      ],
+      "assertion_ids": [
+        "a_id_list",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "A",
+            "phone": "13800000001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "B",
+            "phone": "13800000002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          },
+          {
+            "id": 3,
+            "name": "C",
+            "phone": "13800000003",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 3
+            }
+          }
+        ],
+        "ops": [
+          {
+            "kind": "delete",
+            "id": 2
+          },
+          {
+            "kind": "add",
+            "name": "D",
+            "phone": "13800000004",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 4
+            }
+          }
+        ]
+      },
+      "expected": {
+        "id_list": [
+          1,
+          3,
+          4
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "A",
+            "phone": "13800000001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 3,
+            "name": "C",
+            "phone": "13800000003",
+            "birthday": "1990-01-03"
+          },
+          {
+            "id": 4,
+            "name": "D",
+            "phone": "13800000004",
+            "birthday": "1990-01-04"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_empty_book",
+      "rule_ids": [
+        "R1"
+      ],
+      "partition_ids": [
+        "p_empty_book"
+      ],
+      "assertion_ids": [
+        "a_id_list",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [],
+        "ops": [
+          {
+            "kind": "add",
+            "name": "G",
+            "phone": "13800000011",
+            "birthday": {
+              "year": 1990,
+              "month": 2,
+              "day": 1
+            }
+          }
+        ]
+      },
+      "expected": {
+        "id_list": [
+          1
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "G",
+            "phone": "13800000011",
+            "birthday": "1990-02-01"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_max_seed",
+      "rule_ids": [
+        "R1"
+      ],
+      "partition_ids": [
+        "p_max_seed"
+      ],
+      "assertion_ids": [
+        "a_id_list",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 5,
+            "name": "E",
+            "phone": "13800000005",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 5
+            }
+          },
+          {
+            "id": 9,
+            "name": "F",
+            "phone": "13800000009",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 9
+            }
+          }
+        ],
+        "ops": [
+          {
+            "kind": "add",
+            "name": "H",
+            "phone": "13800000010",
+            "birthday": {
+              "year": 1990,
+              "month": 2,
+              "day": 2
+            }
+          }
+        ]
+      },
+      "expected": {
+        "id_list": [
+          5,
+          9,
+          10
+        ],
+        "contacts_after": [
+          {
+            "id": 5,
+            "name": "E",
+            "phone": "13800000005",
+            "birthday": "1990-01-05"
+          },
+          {
+            "id": 9,
+            "name": "F",
+            "phone": "13800000009",
+            "birthday": "1990-01-09"
+          },
+          {
+            "id": 10,
+            "name": "H",
+            "phone": "13800000010",
+            "birthday": "1990-02-02"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_delete_nonexistent",
+      "rule_ids": [
+        "R4",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_delete_nonexistent"
+      ],
+      "assertion_ids": [
+        "a_id_list",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "A",
+            "phone": "13800000001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "B",
+            "phone": "13800000002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          }
+        ],
+        "ops": [
+          {
+            "kind": "delete",
+            "id": 99
+          },
+          {
+            "kind": "add",
+            "name": "I",
+            "phone": "13800000013",
+            "birthday": {
+              "year": 1990,
+              "month": 2,
+              "day": 3
+            }
+          }
+        ]
+      },
+      "expected": {
+        "id_list": [
+          1,
+          2,
+          3
+        ],
+        "contacts_after": [
+          {
+            "id": 1,
+            "name": "A",
+            "phone": "13800000001",
+            "birthday": "1990-01-01"
+          },
+          {
+            "id": 2,
+            "name": "B",
+            "phone": "13800000002",
+            "birthday": "1990-01-02"
+          },
+          {
+            "id": 3,
+            "name": "I",
+            "phone": "13800000013",
+            "birthday": "1990-02-03"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    },
+    {
+      "schema_version": "1.0",
+      "case_id": "c_multi_add",
+      "rule_ids": [
+        "R2",
+        "R3",
+        "R5"
+      ],
+      "partition_ids": [
+        "p_multi_add"
+      ],
+      "assertion_ids": [
+        "a_id_list",
+        "a_contacts"
+      ],
+      "purpose": "ASSESSMENT",
+      "input": {
+        "initial_contacts": [
+          {
+            "id": 1,
+            "name": "A",
+            "phone": "13800000001",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 1
+            }
+          },
+          {
+            "id": 2,
+            "name": "B",
+            "phone": "13800000002",
+            "birthday": {
+              "year": 1990,
+              "month": 1,
+              "day": 2
+            }
+          }
+        ],
+        "ops": [
+          {
+            "kind": "delete",
+            "id": 1
+          },
+          {
+            "kind": "add",
+            "name": "J",
+            "phone": "13800000021",
+            "birthday": {
+              "year": 1990,
+              "month": 2,
+              "day": 4
+            }
+          },
+          {
+            "kind": "add",
+            "name": "K",
+            "phone": "13800000022",
+            "birthday": {
+              "year": 1990,
+              "month": 2,
+              "day": 5
+            }
+          }
+        ]
+      },
+      "expected": {
+        "id_list": [
+          2,
+          3,
+          4
+        ],
+        "contacts_after": [
+          {
+            "id": 2,
+            "name": "B",
+            "phone": "13800000002",
+            "birthday": "1990-01-02"
+          },
+          {
+            "id": 3,
+            "name": "J",
+            "phone": "13800000021",
+            "birthday": "1990-02-04"
+          },
+          {
+            "id": 4,
+            "name": "K",
+            "phone": "13800000022",
+            "birthday": "1990-02-05"
+          }
+        ]
+      },
+      "fixture_ids": [],
+      "limits_override": null,
+      "oracle_status": "CONFIRMED"
+    }
+  ]
+}

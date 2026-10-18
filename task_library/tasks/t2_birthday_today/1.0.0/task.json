@@ -1,0 +1,125 @@
+{
+  "schema_version": "1.0",
+  "task_spec": {
+    "schema_version": "1.0",
+    "task_id": "t2_birthday_today",
+    "version": "1.0.0",
+    "title": "T2 生日提醒：当天生日必须出现",
+    "description": "生日提醒按“距离今天还有多少天”筛选。当前实现把“生日等于今天”误判为已经过去，从而把当天生日推到明年，导致当天生日的人收不到提醒。要求修正 daysUntilBirthday，使当天生日返回 0，已过的生日才算到明年。",
+    "rules": [
+      {
+        "rule_id": "R1",
+        "statement": "今天是联系人生日时，daysUntilBirthday 必须返回 0，该联系人必须出现在提醒列表中。"
+      },
+      {
+        "rule_id": "R2",
+        "statement": "生日尚未到达且距离不超过 days_ahead 的联系人必须出现在提醒列表中。"
+      },
+      {
+        "rule_id": "R3",
+        "statement": "生日已经过去的联系人必须按下一年的生日计算，不得出现在本次提醒中。"
+      },
+      {
+        "rule_id": "R4",
+        "statement": "days_ahead 为负数时提醒列表必须为空。"
+      },
+      {
+        "rule_id": "R5",
+        "statement": "生日提醒操作不得修改通讯录内容。"
+      }
+    ],
+    "case_ids": [
+      "c_today_exact",
+      "c_today_window",
+      "c_already_passed",
+      "c_leap_day",
+      "c_window_edge",
+      "c_negative_window"
+    ],
+    "io_template_ref": {
+      "id": "tpl_t2_birthday_today",
+      "version": "1.0.0",
+      "sha256": "f4ecdf4ebf6e723d20eeaa3172e51abc3a304b044b91c098f3a6975ede027aa3"
+    },
+    "test_method_ref": {
+      "id": "method_t2_birthday_today",
+      "version": "1.0.0",
+      "sha256": "d2c264db4f36e91f9257a900cafe17b176b10243a44054e5ce7bccbcaf68294c"
+    },
+    "reference_verifier_ref": {
+      "id": "rv_t2_birthday_today",
+      "version": "1.0.0",
+      "sha256": "73a2de87419092078fac2179b1710df45e80ded30f8aadbead71ca07b544f394"
+    },
+    "publication_status": "PUBLISHED",
+    "oracle_provenance": "模式一：期望输出由任务作者按规则推导，并经 reference_suite 的 correct 变体在本地沙箱后端上校准确认；判断依据是测试用例断言，不使用 LLM 判分。"
+  },
+  "project_ref": {
+    "project_id": "contactbook_base",
+    "version": "1.0.0",
+    "root": "projects/contactbook_base/1.0.0"
+  },
+  "build": {
+    "toolchain_id": "gxx_minqw64_ucrt_x64",
+    "exclude_globs": [
+      "main_menu.cpp"
+    ],
+    "harness_files": [
+      "shared/harness/test_entry.cpp",
+      "shared/harness/json_lite.h"
+    ],
+    "harness_include_dir": "shared/harness",
+    "compiler_flags": [
+      "-std=c++17",
+      "-O2",
+      "-Wall",
+      "-Wextra"
+    ]
+  },
+  "limits": {
+    "limits_id": "std_default",
+    "compile_wall_ms": 60000,
+    "case_wall_ms": 3000,
+    "total_wall_ms": 900000,
+    "compile_cpu_ms": 60000,
+    "case_cpu_ms": 2000,
+    "cpu_rate_percent": 80,
+    "compile_memory_bytes": 1073741824,
+    "case_memory_bytes": 268435456,
+    "compile_process_count": 8,
+    "case_process_count": 4,
+    "output_bytes": 1048576,
+    "workdir_bytes": 104857600
+  },
+  "reference_suite": {
+    "schema_version": "1.0",
+    "suite_id": "suite_t2_birthday_today",
+    "version": "1.0.0",
+    "task_id": "t2_birthday_today",
+    "variants": [
+      {
+        "variant_id": "correct",
+        "role": "CORRECT",
+        "description": "按功能要求修正后的实现，必须通过当前测试集",
+        "overrides": [
+          "validators.cpp"
+        ],
+        "expected_assessment_status": "PASS",
+        "must_fail_cases": []
+      },
+      {
+        "variant_id": "faulty",
+        "role": "FAULTY",
+        "description": "保留已知缺陷的初始实现，必须被测试用例识别",
+        "overrides": [
+          "validators.cpp"
+        ],
+        "expected_assessment_status": "FAIL",
+        "must_fail_cases": [
+          "c_today_exact"
+        ]
+      }
+    ]
+  },
+  "student_entry_note": "学生从 task_library/projects/contactbook_base/1.0.0 复制工程后修改对应函数；不要修改 contactbook.h 中的函数签名（三版本头文件必须一致）。"
+}

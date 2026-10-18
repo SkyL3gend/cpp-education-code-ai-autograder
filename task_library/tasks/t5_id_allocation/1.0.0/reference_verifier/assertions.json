@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "verifier_id": "rv_t5_id_allocation",
+  "task_id": "t5_id_allocation",
+  "method_id": "method_t5_id_allocation",
+  "description": "模式一的参照判断程序：测试方法中的断言定义 + shared/harness 测试驱动。",
+  "assertions": [
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_id_list",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3"
+      ],
+      "operator": "EQUALS",
+      "actual_observation_key": "id_list",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/id_list"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    },
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_contacts",
+      "rule_ids": [
+        "R5"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "contacts_after",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/contacts_after"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    }
+  ]
+}

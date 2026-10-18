@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "task_spec": {
+    "schema_version": "1.0",
+    "task_id": "t3_date_validation",
+    "version": "1.0.0",
+    "title": "T3 生日日期校验：闰年与年份范围",
+    "description": "新增联系人时校验生日是否为真实存在的日期。当前实现只限制月份和日下界，2 月一律允许 29 日，也不限制年份范围，因此 1900-02-29、1899-05-10 等非法日期会被接受。要求修正 isValidDate。",
+    "rules": [
+      {
+        "rule_id": "R1",
+        "statement": "年份必须在 1900—2100 之间（含端点）。"
+      },
+      {
+        "rule_id": "R2",
+        "statement": "月份必须在 1—12 之间。"
+      },
+      {
+        "rule_id": "R3",
+        "statement": "日期必须真实存在：2 月在闰年为 29 天、平年为 28 天，其它月份按实际天数。"
+      },
+      {
+        "rule_id": "R4",
+        "statement": "日期不合法时 addContact 必须返回 false，且通讯录内容保持不变。"
+      }
+    ],
+    "case_ids": [
+      "c_valid_leap",
+      "c_valid_common",
+      "c_invalid_1900_02_29",
+      "c_invalid_year_low",
+      "c_invalid_year_high",
+      "c_invalid_april_31"
+    ],
+    "io_template_ref": {
+      "id": "tpl_t3_date_validation",
+      "version": "1.0.0",
+      "sha256": "f07256fecfcdd5db16a7115272404e30f292c322b344de2af57d30c00e3a9ebb"
+    },
+    "test_method_ref": {
+      "id": "method_t3_date_validation",
+      "version": "1.0.0",
+      "sha256": "c264117c01ee22fcebe7a079546cc2975b6391a3889f6328bee024ce9365f825"
+    },
+    "reference_verifier_ref": {
+      "id": "rv_t3_date_validation",
+      "version": "1.0.0",
+      "sha256": "198641749bc77b2cef3dbd8bf215f319e339ad5c3582b32a93b82b811e54d42f"
+    },
+    "publication_status": "PUBLISHED",
+    "oracle_provenance": "模式一：期望输出由任务作者按规则推导，并经 reference_suite 的 correct 变体在本地沙箱后端上校准确认；判断依据是测试用例断言，不使用 LLM 判分。"
+  },
+  "project_ref": {
+    "project_id": "contactbook_base",
+    "version": "1.0.0",
+    "root": "projects/contactbook_base/1.0.0"
+  },
+  "build": {
+    "toolchain_id": "gxx_minqw64_ucrt_x64",
+    "exclude_globs": [
+      "main_menu.cpp"
+    ],
+    "harness_files": [
+      "shared/harness/test_entry.cpp",
+      "shared/harness/json_lite.h"
+    ],
+    "harness_include_dir": "shared/harness",
+    "compiler_flags": [
+      "-std=c++17",
+      "-O2",
+      "-Wall",
+      "-Wextra"
+    ]
+  },
+  "limits": {
+    "limits_id": "std_default",
+    "compile_wall_ms": 60000,
+    "case_wall_ms": 3000,
+    "total_wall_ms": 900000,
+    "compile_cpu_ms": 60000,
+    "case_cpu_ms": 2000,
+    "cpu_rate_percent": 80,
+    "compile_memory_bytes": 1073741824,
+    "case_memory_bytes": 268435456,
+    "compile_process_count": 8,
+    "case_process_count": 4,
+    "output_bytes": 1048576,
+    "workdir_bytes": 104857600
+  },
+  "reference_suite": {
+    "schema_version": "1.0",
+    "suite_id": "suite_t3_date_validation",
+    "version": "1.0.0",
+    "task_id": "t3_date_validation",
+    "variants": [
+      {
+        "variant_id": "correct",
+        "role": "CORRECT",
+        "description": "按功能要求修正后的实现，必须通过当前测试集",
+        "overrides": [
+          "validators.cpp"
+        ],
+        "expected_assessment_status": "PASS",
+        "must_fail_cases": []
+      },
+      {
+        "variant_id": "faulty",
+        "role": "FAULTY",
+        "description": "保留已知缺陷的初始实现，必须被测试用例识别",
+        "overrides": [
+          "validators.cpp"
+        ],
+        "expected_assessment_status": "FAIL",
+        "must_fail_cases": [
+          "c_invalid_1900_02_29"
+        ]
+      }
+    ]
+  },
+  "student_entry_note": "学生从 task_library/projects/contactbook_base/1.0.0 复制工程后修改对应函数；不要修改 contactbook.h 中的函数签名（三版本头文件必须一致）。"
+}

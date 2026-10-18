@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "suite_id": "suite_t4_name_search",
+  "version": "1.0.0",
+  "task_id": "t4_name_search",
+  "variants": [
+    {
+      "variant_id": "correct",
+      "role": "CORRECT",
+      "description": "按功能要求修正后的实现，必须通过当前测试集",
+      "overrides": [
+        "contactbook.cpp"
+      ],
+      "expected_assessment_status": "PASS",
+      "must_fail_cases": []
+    },
+    {
+      "variant_id": "faulty",
+      "role": "FAULTY",
+      "description": "保留已知缺陷的初始实现，必须被测试用例识别",
+      "overrides": [
+        "contactbook.cpp"
+      ],
+      "expected_assessment_status": "FAIL",
+      "must_fail_cases": [
+        "c_case_insensitive"
+      ]
+    }
+  ]
+}

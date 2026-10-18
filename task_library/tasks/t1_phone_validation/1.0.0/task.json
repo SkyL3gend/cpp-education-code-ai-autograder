@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.0",
+  "task_spec": {
+    "schema_version": "1.0",
+    "task_id": "t1_phone_validation",
+    "version": "1.0.0",
+    "title": "T1 手机号校验：11 位数字且以 1 开头",
+    "description": "简化通讯录的 addContact 在新增联系人前校验手机号。当前实现只检查长度与首位，无法识别后 10 位里的非数字字符。要求修正 isValidPhone，使 11 位非全数字的手机号被拒绝，且拒绝时通讯录不变。",
+    "rules": [
+      {
+        "rule_id": "R1",
+        "statement": "手机号必须恰好 11 个字符。"
+      },
+      {
+        "rule_id": "R2",
+        "statement": "手机号必须以 '1' 开头。"
+      },
+      {
+        "rule_id": "R3",
+        "statement": "手机号第 2—11 位必须全部是数字字符 '0'—'9'。"
+      },
+      {
+        "rule_id": "R4",
+        "statement": "手机号不合法时 addContact 必须返回 false，且通讯录内容保持不变。"
+      }
+    ],
+    "case_ids": [
+      "c_valid_11_ascii",
+      "c_short_10",
+      "c_long_12",
+      "c_non_digit_11"
+    ],
+    "io_template_ref": {
+      "id": "tpl_t1_phone_validation",
+      "version": "1.0.0",
+      "sha256": "e88e7a3d52a99857a95796b1a47e7f178a2421b88208da430ca2afac11a126b7"
+    },
+    "test_method_ref": {
+      "id": "method_t1_phone_validation",
+      "version": "1.0.0",
+      "sha256": "f3ee3d51c7222c16a739b8e85f4207b2069a8a30c3a4d10ec84ce87fb736a2d9"
+    },
+    "reference_verifier_ref": {
+      "id": "rv_t1_phone_validation",
+      "version": "1.0.0",
+      "sha256": "cbb0597a33c90f42719dec4c3ac39d2457cbdfd9cd18a2933ba9dc0060236a9a"
+    },
+    "publication_status": "PUBLISHED",
+    "oracle_provenance": "模式一：期望输出由任务作者按规则推导，并经 reference_suite 的 correct 变体在本地沙箱后端上校准确认；判断依据是测试用例断言，不使用 LLM 判分。"
+  },
+  "project_ref": {
+    "project_id": "contactbook_base",
+    "version": "1.0.0",
+    "root": "projects/contactbook_base/1.0.0"
+  },
+  "build": {
+    "toolchain_id": "gxx_minqw64_ucrt_x64",
+    "exclude_globs": [
+      "main_menu.cpp"
+    ],
+    "harness_files": [
+      "shared/harness/test_entry.cpp",
+      "shared/harness/json_lite.h"
+    ],
+    "harness_include_dir": "shared/harness",
+    "compiler_flags": [
+      "-std=c++17",
+      "-O2",
+      "-Wall",
+      "-Wextra"
+    ]
+  },
+  "limits": {
+    "limits_id": "std_default",
+    "compile_wall_ms": 60000,
+    "case_wall_ms": 3000,
+    "total_wall_ms": 900000,
+    "compile_cpu_ms": 60000,
+    "case_cpu_ms": 2000,
+    "cpu_rate_percent": 80,
+    "compile_memory_bytes": 1073741824,
+    "case_memory_bytes": 268435456,
+    "compile_process_count": 8,
+    "case_process_count": 4,
+    "output_bytes": 1048576,
+    "workdir_bytes": 104857600
+  },
+  "reference_suite": {
+    "schema_version": "1.0",
+    "suite_id": "suite_t1_phone_validation",
+    "version": "1.0.0",
+    "task_id": "t1_phone_validation",
+    "variants": [
+      {
+        "variant_id": "correct",
+        "role": "CORRECT",
+        "description": "按功能要求修正后的实现，必须通过当前测试集",
+        "overrides": [
+          "validators.cpp"
+        ],
+        "expected_assessment_status": "PASS",
+        "must_fail_cases": []
+      },
+      {
+        "variant_id": "faulty",
+        "role": "FAULTY",
+        "description": "保留已知缺陷的初始实现，必须被测试用例识别",
+        "overrides": [
+          "validators.cpp"
+        ],
+        "expected_assessment_status": "FAIL",
+        "must_fail_cases": [
+          "c_non_digit_11"
+        ]
+      }
+    ]
+  },
+  "student_entry_note": "学生从 task_library/projects/contactbook_base/1.0.0 复制工程后修改对应函数；不要修改 contactbook.h 中的函数签名（三版本头文件必须一致）。"
+}

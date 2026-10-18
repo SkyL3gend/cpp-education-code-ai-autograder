@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "verifier_id": "rv_t3_date_validation",
+  "task_id": "t3_date_validation",
+  "method_id": "method_t3_date_validation",
+  "description": "模式一的参照判断程序：测试方法中的断言定义 + shared/harness 测试驱动。",
+  "assertions": [
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_created",
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4"
+      ],
+      "operator": "EQUALS",
+      "actual_observation_key": "created",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/created"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    },
+    {
+      "schema_version": "1.0",
+      "assertion_id": "a_contacts",
+      "rule_ids": [
+        "R4"
+      ],
+      "operator": "MULTISET_EQUALS",
+      "actual_observation_key": "contacts_after",
+      "expected_source": {
+        "kind": "CASE_EXPECTED",
+        "pointer": "/contacts_after"
+      },
+      "normalization_id": "identity_v1",
+      "required": true
+    }
+  ]
+}

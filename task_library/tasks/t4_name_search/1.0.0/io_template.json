@@ -1,0 +1,185 @@
+{
+  "schema_version": "1.0",
+  "template_id": "tpl_t4_name_search",
+  "version": "1.0.0",
+  "operation_id": "search_contact",
+  "subject_level": "FUNCTION",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "initial_contacts",
+      "keyword"
+    ],
+    "properties": {
+      "initial_contacts": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/contact"
+        }
+      },
+      "keyword": {
+        "type": "string"
+      }
+    },
+    "$defs": {
+      "contact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "phone",
+          "birthday"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "birthday": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "year",
+              "month",
+              "day"
+            ],
+            "properties": {
+              "year": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9999
+              },
+              "month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "matches",
+      "contacts_after"
+    ],
+    "properties": {
+      "matches": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/contact"
+        }
+      },
+      "contacts_after": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/contact"
+        }
+      }
+    },
+    "$defs": {
+      "contact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "phone",
+          "birthday"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "birthday": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          }
+        }
+      }
+    }
+  },
+  "field_semantics": {
+    "initial_contacts": "动作开始前通讯录中已有的联系人。",
+    "keyword": "检索关键字，原样传入；空字符串是合法输入。",
+    "matches": "命中的联系人完整对象，顺序不限。",
+    "contacts_after": "动作执行后通讯录的完整投影，本操作不得修改通讯录。"
+  },
+  "preconditions": [
+    "通讯录可以先写入 initial_contacts",
+    "只执行一次检索调用"
+  ],
+  "steps": {
+    "setup": [
+      {
+        "step_id": "seed_initial_contacts",
+        "action": "seed_contacts"
+      }
+    ],
+    "action": [
+      {
+        "step_id": "invoke_operation",
+        "action": "search_contact"
+      }
+    ],
+    "observe": [
+      {
+        "step_id": "read_matches",
+        "action": "read_json_field",
+        "pointer": "/matches"
+      },
+      {
+        "step_id": "read_contacts_after",
+        "action": "read_json_field",
+        "pointer": "/contacts_after"
+      }
+    ],
+    "teardown": []
+  },
+  "pre_operations": [],
+  "required_observations": [
+    "matches",
+    "contacts_after"
+  ],
+  "allowed_transforms": [
+    "identity_v1"
+  ],
+  "encoding": "utf-8",
+  "exit_contract": {
+    "success_exit_codes": [
+      0
+    ],
+    "observation_channel": "stdout_line"
+  },
+  "capability_requirements": {
+    "needs_cpu_limit": true,
+    "needs_memory_limit": true,
+    "needs_wall_timeout": true,
+    "needs_process_tree_kill": true,
+    "needs_network_block": true
+  }
+}

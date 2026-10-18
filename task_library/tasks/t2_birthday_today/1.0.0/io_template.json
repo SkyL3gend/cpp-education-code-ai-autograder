@@ -1,0 +1,215 @@
+{
+  "schema_version": "1.0",
+  "template_id": "tpl_t2_birthday_today",
+  "version": "1.0.0",
+  "operation_id": "birthday_reminders",
+  "subject_level": "FUNCTION",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "initial_contacts",
+      "today",
+      "days_ahead"
+    ],
+    "properties": {
+      "initial_contacts": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/contact"
+        }
+      },
+      "today": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "year",
+          "month",
+          "day"
+        ],
+        "properties": {
+          "year": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          },
+          "month": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31
+          }
+        }
+      },
+      "days_ahead": {
+        "type": "integer",
+        "minimum": -1,
+        "maximum": 3660
+      }
+    },
+    "$defs": {
+      "contact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "phone",
+          "birthday"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "birthday": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "year",
+              "month",
+              "day"
+            ],
+            "properties": {
+              "year": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9999
+              },
+              "month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "names",
+      "contacts_after"
+    ],
+    "properties": {
+      "names": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "contacts_after": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/contact"
+        }
+      }
+    },
+    "$defs": {
+      "contact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "phone",
+          "birthday"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "birthday": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          }
+        }
+      }
+    }
+  },
+  "field_semantics": {
+    "initial_contacts": "动作开始前通讯录中已有的联系人。",
+    "today": "由系统提供的“今天”，年/月/日。",
+    "days_ahead": "提醒窗口天数；负数表示非法输入。",
+    "names": "进入提醒列表的联系人姓名，顺序不限。",
+    "contacts_after": "动作执行后通讯录的完整投影，本操作不得修改通讯录。"
+  },
+  "preconditions": [
+    "通讯录可以先写入 initial_contacts",
+    "today 表示调用当天的日期"
+  ],
+  "steps": {
+    "setup": [
+      {
+        "step_id": "seed_initial_contacts",
+        "action": "seed_contacts"
+      }
+    ],
+    "action": [
+      {
+        "step_id": "invoke_operation",
+        "action": "birthday_reminders"
+      }
+    ],
+    "observe": [
+      {
+        "step_id": "read_names",
+        "action": "read_json_field",
+        "pointer": "/names"
+      },
+      {
+        "step_id": "read_contacts_after",
+        "action": "read_json_field",
+        "pointer": "/contacts_after"
+      }
+    ],
+    "teardown": []
+  },
+  "pre_operations": [],
+  "required_observations": [
+    "names",
+    "contacts_after"
+  ],
+  "allowed_transforms": [
+    "identity_v1"
+  ],
+  "encoding": "utf-8",
+  "exit_contract": {
+    "success_exit_codes": [
+      0
+    ],
+    "observation_channel": "stdout_line"
+  },
+  "capability_requirements": {
+    "needs_cpu_limit": true,
+    "needs_memory_limit": true,
+    "needs_wall_timeout": true,
+    "needs_process_tree_kill": true,
+    "needs_network_block": true
+  }
+}

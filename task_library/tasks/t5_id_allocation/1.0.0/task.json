@@ -1,0 +1,124 @@
+{
+  "schema_version": "1.0",
+  "task_spec": {
+    "schema_version": "1.0",
+    "task_id": "t5_id_allocation",
+    "version": "1.0.0",
+    "title": "T5 编号分配：删除后新增不得重复",
+    "description": "新增联系人时分配自增编号。当前实现用“当前条数 + 1”生成编号，删除中间编号后再新增就会产生重复编号。要求修正编号分配逻辑，保证编号大于现有最大编号且已有联系人的编号不变。",
+    "rules": [
+      {
+        "rule_id": "R1",
+        "statement": "新增联系人的编号必须大于当前所有联系人的编号。"
+      },
+      {
+        "rule_id": "R2",
+        "statement": "删除联系人后不得复用仍被占用的编号。"
+      },
+      {
+        "rule_id": "R3",
+        "statement": "连续新增多个联系人时编号必须严格递增且唯一。"
+      },
+      {
+        "rule_id": "R4",
+        "statement": "删除不存在的编号不改变通讯录。"
+      },
+      {
+        "rule_id": "R5",
+        "statement": "编号分配不得修改已有联系人的编号。"
+      }
+    ],
+    "case_ids": [
+      "c_delete_then_add",
+      "c_empty_book",
+      "c_max_seed",
+      "c_delete_nonexistent",
+      "c_multi_add"
+    ],
+    "io_template_ref": {
+      "id": "tpl_t5_id_allocation",
+      "version": "1.0.0",
+      "sha256": "759b4341d995dd27efc1b1b867740cea4488b745d5c7a6a8fba690e2de341d40"
+    },
+    "test_method_ref": {
+      "id": "method_t5_id_allocation",
+      "version": "1.0.0",
+      "sha256": "0ddcc2eb1e40113f463703f69e447cac3d47b345dadb0e12d669d89b10454f17"
+    },
+    "reference_verifier_ref": {
+      "id": "rv_t5_id_allocation",
+      "version": "1.0.0",
+      "sha256": "99c21bb366a503a8c81705016b3562d2a181926deddf6a395976abd5e2cb058c"
+    },
+    "publication_status": "PUBLISHED",
+    "oracle_provenance": "模式一：期望输出由任务作者按规则推导，并经 reference_suite 的 correct 变体在本地沙箱后端上校准确认；判断依据是测试用例断言，不使用 LLM 判分。"
+  },
+  "project_ref": {
+    "project_id": "contactbook_base",
+    "version": "1.0.0",
+    "root": "projects/contactbook_base/1.0.0"
+  },
+  "build": {
+    "toolchain_id": "gxx_minqw64_ucrt_x64",
+    "exclude_globs": [
+      "main_menu.cpp"
+    ],
+    "harness_files": [
+      "shared/harness/test_entry.cpp",
+      "shared/harness/json_lite.h"
+    ],
+    "harness_include_dir": "shared/harness",
+    "compiler_flags": [
+      "-std=c++17",
+      "-O2",
+      "-Wall",
+      "-Wextra"
+    ]
+  },
+  "limits": {
+    "limits_id": "std_default",
+    "compile_wall_ms": 60000,
+    "case_wall_ms": 3000,
+    "total_wall_ms": 900000,
+    "compile_cpu_ms": 60000,
+    "case_cpu_ms": 2000,
+    "cpu_rate_percent": 80,
+    "compile_memory_bytes": 1073741824,
+    "case_memory_bytes": 268435456,
+    "compile_process_count": 8,
+    "case_process_count": 4,
+    "output_bytes": 1048576,
+    "workdir_bytes": 104857600
+  },
+  "reference_suite": {
+    "schema_version": "1.0",
+    "suite_id": "suite_t5_id_allocation",
+    "version": "1.0.0",
+    "task_id": "t5_id_allocation",
+    "variants": [
+      {
+        "variant_id": "correct",
+        "role": "CORRECT",
+        "description": "按功能要求修正后的实现，必须通过当前测试集",
+        "overrides": [
+          "contactbook.cpp"
+        ],
+        "expected_assessment_status": "PASS",
+        "must_fail_cases": []
+      },
+      {
+        "variant_id": "faulty",
+        "role": "FAULTY",
+        "description": "保留已知缺陷的初始实现，必须被测试用例识别",
+        "overrides": [
+          "contactbook.cpp"
+        ],
+        "expected_assessment_status": "FAIL",
+        "must_fail_cases": [
+          "c_delete_then_add"
+        ]
+      }
+    ]
+  },
+  "student_entry_note": "学生从 task_library/projects/contactbook_base/1.0.0 复制工程后修改对应函数；不要修改 contactbook.h 中的函数签名（三版本头文件必须一致）。"
+}
