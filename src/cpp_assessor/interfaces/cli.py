@@ -150,7 +150,7 @@ def _cmd_sandbox_capabilities(args: argparse.Namespace) -> int:
     if not backend.simulated and not capabilities.network_block:
         print(
             "\n注意：该后端不具备网络隔离与文件系统隔离，按 §9.3 能力门禁，"
-            "真实提交默认被拒绝（可用 --allow-unattested-backend 放行，但不得计入验收）。",
+            "真实提交被拒绝；--allow-unattested-backend 仅放行明确选择的内置可信参考样例，不具备正式评分资格。",
             file=sys.stderr,
         )
     return 0
@@ -254,7 +254,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_replay(args: argparse.Namespace) -> int:
+def _cmd_rejudge(args: argparse.Namespace) -> int:
     report = _load_report(args.run_id)
     run_dir = _run_dir(args.run_id)
     task = load_task(
@@ -262,10 +262,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         allow_draft=True,
     )
     if task.package_hash != report.provenance.task_package_hash:
-        print(
-            "警告：当前任务包哈希与报告不一致，replay 使用当前任务包重新判定。",
-            file=sys.stderr,
-        )
+        raise InvalidInputError("任务哈希不匹配，拒绝用新规则伪称原判定复现")
     assertions = {item.assertion_id: item for item in task.method.assertions}
     problems: list[str] = []
     replayed = 0
@@ -311,11 +308,20 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         for problem in problems:
             print(f"  - {problem}")
         return EXIT_INCONCLUSIVE
+    if replayed == 0:
+        raise InvalidInputError("没有重新计算任何断言，不能报告重算一致")
     print(
-        f"replay 一致：{len(report.case_results)} 个用例、{replayed} 条断言可由证据复现，"
+        f"rejudge 一致：{len(report.case_results)} 个用例、{replayed} 条断言可由证据复现，"
         f"结论 {report.assessment_status.value}。"
     )
     return 0
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    from ..orchestrator.replay import replay_run
+    result = replay_run(args.run_id, root=data_dir(), allow_wasm_pilot=args.allow_wasm_pilot)
+    print(f"重放生成新运行 {result.run_id}，父运行 {args.run_id}，结果 {result.assessment_status}")
+    return result.exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
     sandbox_parser = sub.add_parser("sandbox", help="沙箱能力检查")
     sandbox_sub = sandbox_parser.add_subparsers(dest="sandbox_command", required=True)
     capabilities_parser = sandbox_sub.add_parser("capabilities", help="打印后端能力")
-    capabilities_parser.add_argument("--backend", default="local", choices=["local", "mock"])
+    capabilities_parser.add_argument("--backend", default="local", choices=["local", "mock", "wasm_pilot"])
     capabilities_parser.set_defaults(func=_cmd_sandbox_capabilities)
 
     run_parser = sub.add_parser("run", help="执行一次标准测评")
@@ -445,7 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--submission", help="学生提交（目录、单文件或 zip）")
     run_parser.add_argument("--variant", help="参照版本 ID（correct/faulty），用于校准")
     run_parser.add_argument("--target-before", help="学生修改前的工程快照")
-    run_parser.add_argument("--backend", default="local", choices=["local", "mock"])
+    run_parser.add_argument("--backend", default="local", choices=["local", "mock", "wasm_pilot"])
     run_parser.add_argument("--allow-draft", action="store_true", help="允许运行未发布任务")
     run_parser.add_argument(
         "--allow-unattested-backend",
@@ -475,8 +481,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--out")
     report_parser.set_defaults(func=_cmd_report)
 
-    replay_parser = sub.add_parser("replay", help="用已保存的证据复现判定")
+    rejudge_parser = sub.add_parser("rejudge", help="仅用既有观测重新计算断言")
+    rejudge_parser.add_argument("run_id")
+    rejudge_parser.set_defaults(func=_cmd_rejudge)
+    replay_parser = sub.add_parser("replay", help="实际重执行冻结方案，不调用模型，创建新运行")
     replay_parser.add_argument("run_id")
+    replay_parser.add_argument("--allow-wasm-pilot", action="store_true", help="显式允许可信手机号样例的 WebAssembly 试验重放")
     replay_parser.set_defaults(func=_cmd_replay)
 
     selfcheck_parser = sub.add_parser(
@@ -485,7 +495,7 @@ def build_parser() -> argparse.ArgumentParser:
     selfcheck_parser.add_argument(
         "--source", help="要实测的 .cpp 文件；默认使用随附的参考基准程序"
     )
-    selfcheck_parser.add_argument("--backend", default="local", choices=["local", "mock"])
+    selfcheck_parser.add_argument("--backend", default="local", choices=["local", "mock", "wasm_pilot"])
     selfcheck_parser.add_argument("--json", action="store_true", help="输出 JSON 报告")
     selfcheck_parser.add_argument(
         "--strict", action="store_true", help="发现 DEFECT 时返回退出码 1"
@@ -495,7 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser = sub.add_parser("web", help="启动本地 Web 界面")
     web_parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认仅本机）")
     web_parser.add_argument("--port", type=int, default=8765)
-    web_parser.add_argument("--backend", default="local", choices=["local", "mock"])
+    web_parser.add_argument("--backend", default="local", choices=["local", "mock", "wasm_pilot"])
     web_parser.add_argument(
         "--allow-unattested-backend",
         action="store_true",

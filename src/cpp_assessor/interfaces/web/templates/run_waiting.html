@@ -5,12 +5,15 @@
 <section class="waiting">
   <div class="spinner" aria-hidden="true"></div>
   <h1>{{ t('waiting.title') }}</h1>
-  <p class="mono">{{ run_id }}</p>
+  <p class="muted">{{ t('ui.wait.hint') }}</p><p id="live-progress" role="status" aria-live="polite">{{ t('ui.wait.working') }}</p>
+  <details class="details"><summary>{{ t('ui.result.details') }}</summary><p class="mono">{{ run_id }}</p>
   {% if row %}
   <p class="muted">{{ t('waiting.detail', task=row.task_id ~ '@' ~ row.task_version, state=row.workflow_state) }}</p>
   {% else %}
   <p class="muted">{{ t('waiting.queued') }}</p>
   {% endif %}
+  </details>
+  <div class="actions"><a class="button" href="/runs">{{ t('nav.runs') }}</a><form method="post" action="/runs/{{ run_id }}/cancel"><button class="button" type="submit">{{ t('ui.cancel') }}</button></form></div>
   {% if error %}
   <div class="banner error"><strong>{{ t('waiting.failed') }}</strong>: {{ error }}</div>
   {% endif %}
@@ -20,18 +23,22 @@
 {% block scripts %}
 <script>
   const runId = {{ run_id|tojson }};
+  let polling = false;
   const timer = setInterval(async () => {
+    if (polling) return;
+    polling = true;
     try {
       const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {cache: "no-store"});
+      if (!response.ok) throw new Error("progress unavailable");
       const status = await response.json();
+      document.getElementById("live-progress").textContent = {{ t('ui.wait.working')|tojson }};
       if (status.state === "done" || status.state === "failed") {
         clearInterval(timer);
         window.location.reload();
       }
     } catch (err) {
-      clearInterval(timer);
-      window.location.reload();
-    }
+      document.getElementById("live-progress").textContent = {{ t('ui.wait.connection')|tojson }};
+    } finally { polling = false; }
   }, 1200);
 </script>
 {% endblock %}

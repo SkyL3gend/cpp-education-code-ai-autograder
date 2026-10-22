@@ -16,6 +16,7 @@ LLM 只被允许填写这份声明里的字段：
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -23,6 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..domain.enums import DriverKind
 from ..domain.models import AssertionSpec, TaskDocument
+from .policy import validate_build_options, relative_path
+from ..domain.canonical import hash_json
 
 SCHEMA_VERSION = "1.0"
 
@@ -43,6 +46,7 @@ SOURCE_SUFFIXES = {".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx"}
 
 #: ``driver.seed_session`` 里允许的占位符：宿主会对用例声明的每个初始联系人重复执行。
 SEED_PLACEHOLDERS = {
+    "seed.id",
     "seed.name",
     "seed.phone",
     "seed.birthday.year",
@@ -83,7 +87,17 @@ class TargetSpec(_Model):
     entry_files: list[str] = Field(default_factory=list)
     excluded_files: list[str] = Field(default_factory=list)
     include_dirs: list[str] = Field(default_factory=list)
+    runtime_files: list[str] = Field(default_factory=list)
     notes: str = ""
+
+    @field_validator("include_dirs", mode="before")
+    @classmethod
+    def _root_include_is_implicit(cls, value):
+        # The subject root is always included by the host. Models commonly
+        # spell that root as '.', which is not a submitted relative path.
+        if isinstance(value, list):
+            return [item for item in value if item != "."]
+        return value
 
 
 class BuildSpec(_Model):
@@ -98,6 +112,7 @@ class DriverSpec(_Model):
     session: list[str] = Field(default_factory=list)
     session_by_case: dict[str, list[str]] = Field(default_factory=dict)
     seed_session: list[str] = Field(default_factory=list)
+    startup_session: list[str] = Field(default_factory=list)
     eof: bool = True
     driver_source: str = ""
     notes: str = ""
@@ -132,10 +147,12 @@ class DriverSpec(_Model):
 
 
 class ObserverSpec(_Model):
-    kind: Literal["extractor", "json_stdout"] = "extractor"
+    kind: Literal["extractor", "json_stdout", "generated_observer"] = "extractor"
     extractor_id: str = ""
     params: dict[str, Any] = Field(default_factory=dict)
     produces: list[str] = Field(default_factory=list)
+    observer_source: str = ""
+    artifact_paths: list[str] = Field(default_factory=list)
 
     @field_validator("kind", mode="before")
     @classmethod
@@ -173,6 +190,7 @@ class MigrationRow(_Model):
     observation: str = ""
     assertion_ids: list[str] = Field(default_factory=list)
     status: Literal["covered", "gap"] = "covered"
+    method_steps: list[str] = Field(default_factory=list)
 
     @field_validator("driver_step", mode="before")
     @classmethod
@@ -190,6 +208,24 @@ class MigrationRow(_Model):
         return _lower(value) or "covered"
 
 
+class SourceBinding(_Model):
+    role: Literal["ACTION", "OUTPUT"]
+    key: str
+    file: str
+    source_quote: str = Field(min_length=4, max_length=1000)
+    symbol: str = Field(min_length=1)
+
+
+class ReferenceLearning(_Model):
+    method_hash: str
+    setup_steps: list[str]
+    action_steps: list[str]
+    observations: list[str]
+    assertion_ids: list[str]
+    partition_ids: list[str]
+    explanation: str = Field(min_length=20)
+
+
 class TargetVerifierBundle(_Model):
     schema_version: str = SCHEMA_VERSION
     task_id: str
@@ -203,6 +239,8 @@ class TargetVerifierBundle(_Model):
     migration_matrix: list[MigrationRow] = Field(default_factory=list)
     coverage_gaps: list[str] = Field(default_factory=list)
     notes: str = ""
+    reference_learning: ReferenceLearning | None = None
+    source_bindings: list[SourceBinding] = Field(default_factory=list)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -313,6 +351,48 @@ def validate_bundle(
     result = BundleValidation()
     document: TaskDocument = task.document
     spec = document.task_spec
+    result.problems.extend(validate_build_options(bundle.build))
+    for artifact_path in bundle.observer.artifact_paths:
+        try:
+            relative_path(artifact_path)
+        except Exception:
+            result.problems.append(f"观测文件路径非法：{artifact_path}")
+    for path in bundle.target.sources + bundle.target.entry_files + bundle.target.excluded_files + bundle.target.include_dirs + bundle.target.runtime_files:
+        try:
+            relative_path(path)
+        except Exception as exc:
+            result.problems.append(f"目标路径非法：{path}: {exc}")
+    for path in bundle.target.runtime_files:
+        if path not in files or Path(path).name in {"stdout.txt", "stderr.txt", "stdin.txt", "request.json", "observer_request.json", "observer_stdout.txt", "observer_stderr.txt"}:
+            result.problems.append(f"运行期文件缺失或与协议工件冲突：{path}")
+    if bundle.coverage_gaps:
+        result.problems.append("coverage_gaps 非空；不能将覆盖缺口声明为完整适配")
+    learning = bundle.reference_learning
+    if learning is None:
+        result.problems.append("缺少 reference_learning：必须先阅读基准测试方法和判断程序")
+    else:
+        expected_learning = {
+            "setup_steps": task.method.setup_steps,
+            "action_steps": task.method.action_steps,
+            "observations": task.method.observations,
+            "assertion_ids": [a.assertion_id for a in task.method.assertions if a.required],
+            "partition_ids": task.method.coverage_requirements.required_partitions,
+        }
+        if learning.method_hash != hash_json(task.method.model_dump(mode="json")):
+            result.problems.append("reference_learning.method_hash 不匹配基准测试方法")
+        for field, required in expected_learning.items():
+            if set(getattr(learning, field)) != set(required):
+                result.problems.append(f"基准方法学习遗漏/改写了 {field}")
+    bindings = {(b.role, b.key): b for b in bundle.source_bindings}
+    required_bindings = [("ACTION", key) for key in task.method.action_steps] + [("OUTPUT", key) for key in task.method.observations]
+    for binding_key in required_bindings:
+        binding = bindings.get(binding_key)
+        if binding is None:
+            result.problems.append(f"缺少目标源码证据映射：{binding_key}")
+        elif binding.file not in files or binding.source_quote not in files[binding.file]:
+            result.problems.append(f"源码映射引用不存在：{binding.key}")
+        elif binding.symbol not in files[binding.file]:
+            result.problems.append(f"源码映射符号不存在：{binding.symbol}")
 
     if bundle.schema_version != SCHEMA_VERSION:
         result.problems.append(f"schema_version 必须是 {SCHEMA_VERSION}")
@@ -334,11 +414,20 @@ def validate_bundle(
     for entry in bundle.target.entry_files:
         if entry.replace("\\", "/") not in normalized_files:
             result.problems.append(f"target.entry_files 里的文件不存在：{entry}")
-    if bundle.target.encoding.lower() not in {"utf-8", "utf8", "gbk", "gb18030"}:
+    for path in bundle.target.excluded_files:
+        if path not in normalized_files:
+            result.problems.append(f"排除文件不存在：{path}")
+    if set(bundle.target.sources) & set(bundle.target.excluded_files):
+        result.problems.append("被测源码不能同时包含于 sources 与 excluded_files")
+    for directory in bundle.target.include_dirs:
+        if not any(p.startswith(directory.rstrip("/") + "/") for p in normalized_files):
+            result.problems.append(f"include 目录不存在：{directory}")
+    if bundle.target.encoding.lower() not in {"utf-8", "utf8", "gbk"}:
         result.problems.append(f"不支持的编码声明：{bundle.target.encoding}")
 
     # 驱动
     known_inputs = schema_paths(task.template.input_schema)
+    known_inputs.add("__input_json__")
 
     def _check_script_lines(script: list[str], where: str) -> None:
         for index, step in enumerate(script):
@@ -357,7 +446,8 @@ def validate_bundle(
         if not bundle.driver.session and not bundle.driver.session_by_case:
             result.problems.append("stdin_script 驱动必须给出非空的 session 剧本")
         _check_script_lines(bundle.driver.session, "session")
-        for step in bundle.driver.session:
+        _check_script_lines(bundle.driver.startup_session, "startup_session")
+        for step in bundle.driver.session + bundle.driver.startup_session:
             for placeholder in _placeholders(step):
                 if not _placeholder_known(placeholder, known_inputs):
                     result.problems.append(f"剧本占位符不在输入模板里：{{{{{placeholder}}}}}")
@@ -417,11 +507,16 @@ def validate_bundle(
 
     # 观测
     if bundle.driver.kind == "stdin_script":
-        if bundle.observer.kind != "extractor":
-            result.problems.append("菜单剧本必须使用宿主注册的提取器观测")
+        if bundle.observer.kind == "generated_observer":
+            if len(bundle.observer.observer_source) < 60:
+                result.problems.append("generated_observer 必须给出 C++ observer_source")
+        elif bundle.observer.kind != "extractor":
+            result.problems.append("菜单剧本需要可信提取器或隔离内 generated_observer")
         elif bundle.observer.extractor_id not in extractor_ids:
             result.problems.append(f"提取器未注册：{bundle.observer.extractor_id!r}")
     for key, value in bundle.observer.params.items():
+        if key in {"baseline_names", "renumber_ids", "id_offset"}:
+            result.problems.append(f"禁止观测转换 {key}：不能过滤实际记录或改写编号")
         if isinstance(value, str):
             for placeholder in _placeholders(value):
                 if not _placeholder_known(placeholder, known_inputs):
@@ -452,6 +547,24 @@ def validate_bundle(
         result.problems.append(f"迁移矩阵缺分区：{partition}")
     for partition in sorted(declared - required_partitions):
         result.warnings.append(f"迁移矩阵多出未定义分区：{partition}")
+    if len(declared) != len(bundle.migration_matrix):
+        result.problems.append("迁移矩阵有重复分区")
+    required_steps = set(task.method.setup_steps + task.method.action_steps)
+    for row in bundle.migration_matrix:
+        if row.status != "covered" or not row.observation.strip():
+            result.problems.append(f"分区 {row.partition_id} 未覆盖观测")
+        if not required_steps <= set(row.method_steps):
+            result.problems.append(f"分区 {row.partition_id} 缺少基准操作步骤映射")
+        if not set(required_assertions) <= set(row.assertion_ids):
+            result.problems.append(f"分区 {row.partition_id} 缺少必需断言")
+        if bundle.driver.kind == "stdin_script":
+            scripts = [bundle.driver.session] + list(bundle.driver.session_by_case.values())
+            if row.driver_step is None or row.driver_step < 0 or not any(row.driver_step < len(s) for s in scripts):
+                result.problems.append(f"分区 {row.partition_id} 的 driver_step 无效（零起始下标）")
+    if bundle.driver.kind == "function_driver":
+        actions = [b.symbol for b in bundle.source_bindings if b.role == "ACTION"]
+        if not actions or not any(re.search(r"\b" + re.escape(symbol.split("::")[-1]) + r"\s*\(", bundle.driver.driver_source) for symbol in actions):
+            result.problems.append("函数驱动没有调用已映射的目标业务符号")
 
     # 严禁夹带期望值/结论
     for location, key in _walk(bundle.model_dump()):

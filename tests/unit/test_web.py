@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import io
+import copy
+import hashlib
 import json
 import shutil
 import time
@@ -13,7 +15,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from cpp_assessor.interfaces.web.app import WebSettings, create_app
+from cpp_assessor.domain.canonical import hash_json
+from cpp_assessor.domain.models import AssessmentReport
+from cpp_assessor.interfaces.web.app import WebSettings, _read_target_challenges, create_app
 
 TASK_REF = "t1_phone_validation@1.0.0"
 
@@ -62,14 +66,20 @@ def _start_variant_run(client: TestClient, variant: str = "correct") -> str:
     return location.rsplit("/", 1)[-1]
 
 
-def test_modes_page_offers_standard_and_llm(client: TestClient) -> None:
+def test_home_offers_only_llm_assessment(client: TestClient) -> None:
     response = client.get("/")
     assert response.status_code == 200
     body = response.text
-    assert "基准模式" in body
-    assert "LLM 模式" in body
-    assert 'href="/standard"' in body
-    assert 'href="/llm"' in body
+    assert "AI 代码测评" in body
+    assert f'href="/llm/tasks/{TASK_REF}"' in body
+    for hidden in ('href="/standard"', 'href="/batch"', 'href="/reference"', '基准模式'):
+        assert hidden not in body
+    task_page = client.get(f"/llm/tasks/{TASK_REF}").text
+    assert 'action="/llm/runs"' in task_page
+    assert 'action="/runs"' not in task_page
+    assert '#demo' not in task_page
+    assert 'name="variant"' not in task_page
+    assert '参照版本' not in task_page
 
 
 def test_llm_page_explains_key_and_lists_tasks(client: TestClient) -> None:
@@ -97,8 +107,8 @@ def test_language_switch_renders_english(client: TestClient) -> None:
     response = client.get("/?lang=en")
     assert response.status_code == 200
     assert "lang=\"en\"" in response.text
-    assert "Choose an assessment mode" in response.text
-    assert "Standard mode" in response.text
+    assert "Choose a task for AI code assessment" in response.text
+    assert "Standard mode" not in response.text
     # 语言只影响展示：任务编号与枚举值仍是英文代码。
     assert "Accepted" not in response.text or "PASS" in response.text
 
@@ -118,17 +128,17 @@ def test_variant_run_reports_pass_and_exports(client: TestClient) -> None:
     run_id = _start_variant_run(client)
     status = _wait_for_run(client, run_id)
     assert status["state"] == "done"
-    assert status["assessment_status"] == "PASS"
+    assert status["assessment_status"] == "INCONCLUSIVE"
 
     page = client.get(f"/runs/{run_id}")
     assert page.status_code == 200
-    assert "Accepted" in page.text
+    assert "Inconclusive" in page.text
     assert "通过" in page.text
     assert "c_non_digit_11" in page.text
 
     report_json = client.get(f"/runs/{run_id}/report.json")
     assert report_json.status_code == 200
-    assert report_json.json()["assessment_status"] == "PASS"
+    assert report_json.json()["assessment_status"] == "INCONCLUSIVE"
 
     report_csv = client.get(f"/runs/{run_id}/report.csv")
     assert report_csv.status_code == 200
@@ -139,10 +149,10 @@ def test_variant_run_reports_pass_and_exports(client: TestClient) -> None:
 def test_faulty_variant_reports_fail(local_client: TestClient) -> None:
     run_id = _start_variant_run(local_client, variant="faulty")
     status = _wait_for_run(local_client, run_id, timeout=120.0)
-    assert status["assessment_status"] == "FAIL"
+    assert status["assessment_status"] == "INCONCLUSIVE"
     page = local_client.get(f"/runs/{run_id}")
-    assert "Rejected" in page.text
-    assert "未通过" in page.text
+    assert "Inconclusive" in page.text
+    assert "不确定" in page.text
 
 
 def test_create_run_requires_submission_or_variant(client: TestClient) -> None:
@@ -174,31 +184,14 @@ def test_queued_run_page_is_not_404(client: TestClient) -> None:
     assert "任务已排队" in response.text
 
 
-def test_unmatched_single_file_falls_back_to_observation_instead_of_rejecting(
-    local_client: TestClient, tmp_path: Path
-) -> None:
-    """单文件与基准工程无交集时不再拒绝，而是进入观察型适配。"""
-    submission = tmp_path / "unrelated.cpp"
-    submission.write_text("int main() { return 0; }\n", encoding="utf-8", newline="\n")
-    response = local_client.post(
-        "/runs",
-        data={"task_ref": TASK_REF},
-        files={"submission": ("unrelated.cpp", submission.read_bytes())},
-        follow_redirects=False,
-    )
-    assert response.status_code == 303, response.text
-    run_id = response.headers["location"].rsplit("/", 1)[-1]
-
-    status = _wait_for_run(local_client, run_id)
-    assert status["state"] == "done"
-    assert status["execution_status"] == "COMPLETED"
-    # 程序能编译运行，但输出里没有可核对的事实：不能判对错，只能 INCONCLUSIVE。
-    assert status["assessment_status"] == "INCONCLUSIVE"
-
-    page = local_client.get(f"/runs/{run_id}")
-    assert page.status_code == 200
-    assert "single_file" in page.text
-    assert "单文件适配" in page.text
+def test_unmatched_upload_is_rejected_without_legacy_pass(local_client,tmp_path):
+    response=local_client.post("/runs",data={"task_ref":TASK_REF},files={"submission":("unrelated.cpp",b"int main(){return 0;}")},follow_redirects=False)
+    run_id=response.headers["location"].rsplit("/",1)[-1]
+    status=_wait_for_run(local_client,run_id)
+    assert status["assessment_status"]=="NOT_ASSESSED"
+    assert status["execution_status"]=="INVALID_INPUT"
+    report=local_client.get(f"/runs/{run_id}/report.json").json()
+    assert report["counts"]["attempted_cases"]==0
 
 
 def test_run_id_with_dotdot_is_rejected(client: TestClient) -> None:
@@ -208,7 +201,7 @@ def test_run_id_with_dotdot_is_rejected(client: TestClient) -> None:
 def test_base_project_download_and_submission_guidance(client: TestClient) -> None:
     page = client.get(f"/tasks/{TASK_REF}")
     assert "/base.zip" in page.text
-    assert "单文件适配（观察型）" in page.text
+    assert "LLM" in page.text
 
     archive = client.get(f"/tasks/{TASK_REF}/base.zip")
     assert archive.status_code == 200
@@ -263,7 +256,7 @@ def test_batch_runs_programs_times_tasks(client: TestClient, tmp_path: Path) -> 
     assert page.status_code == 200
     assert "t1_phone_validation@1.0.0" in page.text
     assert "t2_birthday_today@1.0.0" in page.text
-    assert "Accepted" in page.text
+    assert "Inconclusive" in page.text
     # 每个格子都能点进单次运行报告。
     entries = client.get(f"/batch/{batch_id}").text.count('href="/runs/run_')
     assert entries >= 4
@@ -331,7 +324,7 @@ def test_batch_accepts_zip_and_single_file_programs(client: TestClient, tmp_path
     )
     run_page = client.get(f"/runs/{single_entry['run_id']}")
     assert run_page.status_code == 200
-    assert "single_file" in run_page.text
+    assert "未测评" in run_page.text
 
 
 def test_batch_rejects_unsupported_file(client: TestClient) -> None:
@@ -376,3 +369,163 @@ def test_reference_selfcheck_page_and_run(local_client: TestClient) -> None:
     assert verdicts["phone_digits"] == "DEFECT"
     assert verdicts["name_search_case"] == "DEFECT"
     assert verdicts["smoke_menu"] == "PASS"
+
+
+def _supplemental_web_record(tmp_path: Path, *, defect: bool = False):
+    """Synthetic saved evidence: no model, compiler or assessment is invoked."""
+    run_id = "run_saved_supplemental"
+    settings = WebSettings(backend="mock", data_root=tmp_path / "data")
+    root = settings.data_root / "runs" / run_id
+    (root / "plans").mkdir(parents=True)
+    (root / "evidence" / "target_challenges").mkdir(parents=True)
+    formal_cases = ["c_valid_11_ascii", "c_short_10", "c_long_12", "c_non_digit_11"]
+    report = AssessmentReport.model_validate({
+        "schema_version": "1.0", "run_id": run_id, "mode": "llm",
+        "execution_status": "COMPLETED", "assessment_status": "INCONCLUSIVE",
+        "grade_eligible": False, "grade_eligible_reasons": ["VALIDATION_LEVEL_CHECKED"],
+        "validation_level": "CHECKED",
+        "coverage": {"planned_cases": formal_cases, "completed_cases": formal_cases,
+            "missed_cases": [], "planned_partitions": [], "covered_partitions": [],
+            "missing_partitions": [], "planned_assertions": [], "executed_assertions": [],
+            "missing_assertions": [], "complete": True},
+        "case_results": [],
+        "counts": {"required_cases": 4, "attempted_cases": 4, "completed_cases": 4,
+            "matched_cases": 4, "mismatched_cases": 0, "not_compared_cases": 0,
+            "required_assertions": 0, "matched_assertions": 0,
+            "mismatched_assertions": 0, "not_compared_assertions": 0},
+        "evidence_refs": [],
+        "provenance": {"execution_backend": "wasm_pilot", "sandbox_attested": False,
+            "task_id": "t1_phone_validation", "task_version": "1.0.0",
+            "task_package_hash": "c" * 64, "submission_id": "sub_saved",
+            "toolchain_id": "wasi_test", "started_at": "2026-10-22T12:00:00Z",
+            "finished_at": "2026-10-22T12:00:01Z", "assessor_version": "test",
+            "protocol_version": "1.0"},
+    })
+    frozen = {"task_hash": "c" * 64, "submission": {"submission_id": "sub_saved"},
+        "bundle": {"task_id": "t1_phone_validation", "task_version": "1.0.0",
+            "build": {"artifact_name": "subject.wasm"}}}
+    replay = {"environment_digest": "a" * 64,
+        "file_hashes": {"generated/build/subject.wasm": "b" * 64}}
+    labels = [("challenge_prefix_2", "11 位号码以 2 开头", "23800138000"),
+              ("challenge_empty", "空手机号", ""),
+              ("challenge_fullwidth", "全角数字手机号", "１３８００１３８０００")]
+    rows = [{"case_id": identifier, "label": label,
+        "input": {"candidate": {"phone": phone}}, "expected": {"created": False},
+        "actual": {"created": defect and index == 0},
+        "comparison": "MISMATCH" if defect and index == 0 else "MATCH",
+        "termination": "EXITED", "protocol_status": "OK", "detail": None}
+        for index, (identifier, label, phone) in enumerate(labels)]
+    candidate = {"schema_version": "1.0", "policy_version": "t1-target-challenges-v1",
+        "run_id": run_id, "purpose": "SUPPLEMENTAL_RULE_CHECK", "backend_id": "wasm_pilot",
+        "task_package_hash": frozen["task_hash"], "verifier_bundle_hash": hash_json(frozen["bundle"]),
+        "environment_digest": replay["environment_digest"], "executable_hash": "b" * 64,
+        "status": "COMPLETED", "passed": not defect, "defect_detected": defect,
+        "grade_eligible": False, "model_calls": 0, "challenge_results": rows,
+        "challenge_counts": {"required": 3, "attempted": 3, "matched": 2 if defect else 3,
+            "mismatched": 1 if defect else 0, "not_compared": 0}}
+    (root / "objective_report.json").write_text(report.model_dump_json(), encoding="utf-8")
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    return settings, report, root, candidate, frozen, replay
+
+
+def _write_supplemental_web_record(root, candidate, frozen, replay):
+    candidate["record_hash"] = hash_json({key: value for key, value in candidate.items() if key != "record_hash"})
+    frozen_bytes = json.dumps(frozen, ensure_ascii=False).encode("utf-8")
+    replay["file_hashes"]["plans/frozen_plan.json"] = hashlib.sha256(frozen_bytes).hexdigest()
+    (root / "plans/frozen_plan.json").write_bytes(frozen_bytes)
+    (root / "plans/replay_manifest.json").write_text(json.dumps(replay), encoding="utf-8")
+    (root / "evidence/target_challenges/target_challenges.json").write_text(json.dumps(candidate), encoding="utf-8")
+
+
+def test_target_challenges_display_saved_environment_without_current_backend(tmp_path, monkeypatch):
+    settings, report, _, candidate, _, _ = _supplemental_web_record(tmp_path)
+    def no_current_backend(*args, **kwargs):
+        raise AssertionError("Historical evidence must not consult the current backend")
+    monkeypatch.setattr("cpp_assessor.interfaces.web.app.make_backend", no_current_backend)
+    assert _read_target_challenges(settings, report.run_id, report) == candidate
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}")
+    assert page.status_code == 200
+    assert "3 项补充规则均符合预期" in page.text
+    assert "11 位号码以 2 开头" in page.text
+    assert "空手机号" in page.text and "全角数字手机号" in page.text
+
+
+@pytest.mark.parametrize("binding", ["run", "task", "bundle", "environment", "executable", "backend", "submission", "task_version", "frozen_bytes", "record_hash"])
+def test_target_challenges_reject_changed_saved_binding(tmp_path, binding):
+    settings, report, root, candidate, frozen, replay = _supplemental_web_record(tmp_path)
+    if binding in {"run", "task", "bundle", "environment", "executable", "backend"}:
+        key = {"run": "run_id", "task": "task_package_hash", "bundle": "verifier_bundle_hash",
+            "environment": "environment_digest", "executable": "executable_hash", "backend": "backend_id"}[binding]
+        candidate[key] = "run_other" if binding == "run" else "local" if binding == "backend" else "d" * 64
+    elif binding == "submission":
+        frozen["submission"]["submission_id"] = "sub_other"
+    elif binding == "task_version":
+        frozen["bundle"]["task_version"] = "2.0.0"
+        candidate["verifier_bundle_hash"] = hash_json(frozen["bundle"])
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    if binding == "frozen_bytes":
+        with (root / "plans/frozen_plan.json").open("ab") as handle:
+            handle.write(b" ")
+    elif binding == "record_hash":
+        candidate["challenge_results"][0]["actual"]["created"] = True
+        (root / "evidence/target_challenges/target_challenges.json").write_text(json.dumps(candidate), encoding="utf-8")
+    assert _read_target_challenges(settings, report.run_id, report) is None
+
+
+@pytest.mark.parametrize("malformation", ["counts", "passed", "defect_detected", "duplicate_case", "unknown_case", "unknown_status"])
+def test_target_challenges_reject_inconsistent_summary(tmp_path, malformation):
+    settings, report, root, candidate, frozen, replay = _supplemental_web_record(tmp_path)
+    if malformation == "counts":
+        candidate["challenge_counts"]["mismatched"] = 1
+    elif malformation in {"passed", "defect_detected"}:
+        candidate[malformation] = not candidate[malformation]
+    elif malformation == "duplicate_case":
+        candidate["challenge_results"][1] = copy.deepcopy(candidate["challenge_results"][0])
+    elif malformation == "unknown_case":
+        candidate["challenge_results"][0]["case_id"] = "challenge_other"
+    else:
+        candidate["status"] = "TRUSTED"
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    assert _read_target_challenges(settings, report.run_id, report) is None
+
+
+@pytest.mark.parametrize("key", ["environment_digest", "executable_hash"])
+def test_target_challenges_reject_missing_digest_even_if_manifest_agrees(tmp_path, key):
+    settings, report, root, candidate, frozen, replay = _supplemental_web_record(tmp_path)
+    candidate[key] = None
+    if key == "environment_digest":
+        replay[key] = None
+    else:
+        replay["file_hashes"]["generated/build/subject.wasm"] = None
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    assert _read_target_challenges(settings, report.run_id, report) is None
+
+
+def test_target_challenges_new_defect_is_separate_from_four_formal_cases(tmp_path):
+    settings, report, _, _, _, _ = _supplemental_web_record(tmp_path, defect=True)
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}")
+        exported = client.get(f"/runs/{report.run_id}/report.json").json()
+    assert page.status_code == 200
+    assert "请先查看“补充规则检查”中的输入与实际结果" in page.text
+    assert "发现 1 项必测用例之外的差异" in page.text
+    assert "4 项符合预期，0 项不符合预期" in page.text
+    assert "不改变下方 4 项必测用例计数" in page.text
+    assert 'id="supplemental-checks"' in page.text
+    assert "23800138000" in page.text
+    assert exported["counts"] == report.counts.model_dump(mode="json")
+    assert exported["grade_eligible"] is False
+
+
+def test_target_challenges_partial_result_cannot_claim_a_defect(tmp_path):
+    settings, report, root, candidate, frozen, replay = _supplemental_web_record(tmp_path, defect=True)
+    candidate.update(status="CANCELLED", passed=False, defect_detected=False)
+    candidate["challenge_results"] = candidate["challenge_results"][:1]
+    candidate["challenge_counts"] = {"required": 3, "attempted": 1, "matched": 0, "mismatched": 1, "not_compared": 2}
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    assert _read_target_challenges(settings, report.run_id, report) == candidate
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}")
+    assert "补充检查尚未获得完整可比较的结果" in page.text
+    assert "发现 1 项必测用例之外的差异" not in page.text

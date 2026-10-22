@@ -18,7 +18,8 @@ def run(**overrides):
         "execution_status": ExecutionStatus.COMPLETED,
         "case_results": [],
         "coverage": None,
-        "validation_level": ValidationLevel.CHECKED,
+        "validation_level": ValidationLevel.CALIBRATED,
+        "original_build_confirmed": True,
         "task_published": True,
         "assertions_confirmed": True,
         "execution_backend_attested": True,
@@ -74,7 +75,7 @@ def test_compile_error_is_fail_without_running_cases(make_coverage):
     assert result.counts.attempted_cases == 0
 
 
-def test_subject_crash_is_fail_even_if_coverage_incomplete(
+def test_subject_crash_does_not_hide_incomplete_coverage(
     make_case_result, make_coverage
 ):
     """学生崩溃导致"未比较"时不能退化成 INCONCLUSIVE。"""
@@ -90,8 +91,8 @@ def test_subject_crash_is_fail_even_if_coverage_incomplete(
         ],
         coverage=make_coverage(complete=False),
     )
-    assert result.assessment_status is OverallStatus.FAIL
-    assert "SUBJECT_CRASH_OR_LIMIT" in result.reasons
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
+    assert "COVERAGE_INCOMPLETE" in result.reasons
 
 
 def test_adapter_protocol_fault_is_inconclusive(make_case_result, make_coverage):
@@ -141,3 +142,17 @@ def test_cancelled_run_is_not_assessed(make_coverage):
 def test_no_cases_is_not_assessed(make_coverage):
     result = run(case_results=[], coverage=make_coverage(complete=True))
     assert result.assessment_status is OverallStatus.NOT_ASSESSED
+
+def test_checked_adapter_is_only_exploratory(make_case_result, make_coverage):
+    result = run(case_results=[make_case_result()], coverage=make_coverage(), validation_level=ValidationLevel.CHECKED)
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
+    assert result.grade_eligible is False
+
+def test_unpublished_unverified_crash_cannot_acquire_qualification(make_case_result, make_coverage):
+    result = run(case_results=[make_case_result(termination=Termination.CRASH, note="SUBJECT_FAULT")], coverage=make_coverage(), task_published=False, assertions_confirmed=False, validation_level=ValidationLevel.UNVERIFIED)
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
+    assert not result.grade_eligible
+
+def test_generated_compile_failure_cannot_be_attributed_to_student(make_coverage):
+    result = run(execution_status=ExecutionStatus.SUBMISSION_COMPILE_ERROR, coverage=make_coverage(), original_build_confirmed=False)
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE

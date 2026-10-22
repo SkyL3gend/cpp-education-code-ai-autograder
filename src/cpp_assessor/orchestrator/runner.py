@@ -99,6 +99,7 @@ from ..sandbox.win32 import minimal_environment
 from ..storage.artifacts import Artifact, ArtifactStore
 from ..storage.db import Database
 from ..tasks.loader import LoadedTask, compose_subject, load_task, subject_source_units
+from ..tasks.calibration import calibration_level
 from .protocol import build_request, parse_response
 
 #: 允许"提交文件覆盖基准工程同名文件"的后缀（源码与头文件）。
@@ -133,6 +134,9 @@ class RunOptions:
     data_dir: Path | None = None
     task_library: Path | None = None
     run_id: str | None = None
+    # Internal test/development seam, never accepted from CLI/Web uploads.
+    trusted_fixture: bool = False
+    reserved_run: bool = False
 
 
 @dataclass
@@ -153,7 +157,7 @@ class RunResult:
 # ---------------------------------------------------------------------------
 
 
-_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
 
 def new_run_id() -> str:
@@ -168,6 +172,9 @@ def make_backend(name: str):
         return LocalJobBackend()
     if normalized == "mock":
         return MockBackend()
+    if normalized == "wasm_pilot":
+        from ..sandbox.wasm import WasmPilotBackend
+        return WasmPilotBackend()
     raise InvalidInputError(
         f"未知执行后端 {name!r}；可用：local（Win32 Job Object）、mock（仅验证状态机）"
     )
@@ -186,7 +193,8 @@ def effective_limits(base: ResourceLimits, override: dict[str, int] | None) -> R
 def _read_text(path: Path, limit: int = 4 * 1024 * 1024) -> str:
     if not path.is_file():
         return ""
-    data = path.read_bytes()[:limit]
+    with path.open("rb") as stream:
+        data = stream.read(limit)
     return data.decode("utf-8", errors="replace")
 
 
@@ -194,7 +202,8 @@ def _read_program_output(path: Path, limit: int = 4 * 1024 * 1024) -> str:
     """读取被测程序输出：先按 UTF-8，再按 GBK（控制台程序常见两种编码）。"""
     if not path.is_file():
         return ""
-    data = path.read_bytes()[:limit]
+    with path.open("rb") as stream:
+        data = stream.read(limit)
     for encoding in ("utf-8", "gbk"):
         try:
             return data.decode(encoding)
@@ -234,7 +243,7 @@ def _empty_counts() -> ReportCounts:
 def execute_standard_run(options: RunOptions) -> RunResult:
     """执行一次模式一测评并返回结果（报告始终落盘）。"""
     if options.mode is not Mode.STANDARD:
-        raise InvalidInputError("当前原型只实现模式一（standard）；模式二尚未交付")
+        raise InvalidInputError("模式一运行器只接受 standard；LLM 模式请使用 execute_llm_run")
     if options.variant is None and options.submission is None:
         raise InvalidInputError("缺少 --submission（或校准用 --variant）")
 
@@ -250,12 +259,12 @@ def execute_standard_run(options: RunOptions) -> RunResult:
     backend = make_backend(options.backend)
 
     run_id = options.run_id or new_run_id()
-    if not _RUN_ID_RE.fullmatch(run_id):
+    if not _RUN_ID_RE.fullmatch(run_id) or ".." in run_id or run_id.endswith("."):
         raise InvalidInputError(
-            f"run_id 不合法：{run_id!r}（只允许字母、数字、下划线、点、冒号、短横线）"
+            f"run_id 不合法：{run_id!r}（只允许安全的字母、数字、下划线、点和短横线）"
         )
     run_dir = data_root / "runs" / run_id
-    if run_dir.exists():
+    if run_dir.exists() and not (options.reserved_run and all(p.name == "CANCEL" and p.is_file() for p in run_dir.iterdir())):
         raise InvalidInputError(f"run 目录已存在，拒绝覆盖：{run_dir}")
     store = ArtifactStore(data_root / "runs", run_id)
     db = Database(data_root / "app.sqlite3")
@@ -323,6 +332,7 @@ class _StandardRun:
         self.execution_status_decided = False
         self.error: str | None = None
         self.started_at = utc_now()
+        self.deadline = time.monotonic() + task.document.limits.total_wall_ms / 1000
         self.finished_at: str | None = None
 
         self.manifest: SubmissionManifest | None = None
@@ -339,8 +349,7 @@ class _StandardRun:
         self.raw_submission_id: str | None = None
         self.overridden: list[str] = []
         self.added: list[str] = []
-        # 单文件适配（观察型）：提交物与基准工程毫无交集时启用，见
-        # selfcheck/probes.py。None 表示走正常的“覆盖基准工程”路径。
+        # 兼容内部旧报告构造；普通提交不再自动进入单文件探针模式。
         self.legacy: Any = None
         self.legacy_rel: str | None = None
 
@@ -513,7 +522,7 @@ class _StandardRun:
         matched_sources = [p for p in self.overridden if Path(p).suffix.lower() in _OVERLAY_SUFFIXES]
         if not matched_sources:
             # 与基准工程没有任何交集：不再拒绝，退化为“单文件适配（观察型）”。
-            self._enter_legacy_mode(composed_dir, raw_root, source_files)
+            raise InvalidInputError("提交不符合本题基准接口；请使用 LLM 模式生成目标判断程序。标准模式不能降级为单条观察测试。")
 
     def _enter_legacy_mode(
         self, composed_dir: Path, raw_root: Path, source_files: list[Any]
@@ -616,7 +625,7 @@ class _StandardRun:
         gate = evaluate_gate(
             capabilities,
             self.task.template.capability_requirements,
-            allow_unattested=bool(self.backend.simulated) or self.options.allow_unattested,
+            allow_unattested=bool(self.backend.simulated) or (self.options.allow_unattested and (self.options.trusted_fixture or self.options.variant is not None)),
         )
         # 校验记录先落盘，再按门禁决定是否继续；否则失败时没有证据。
         checks = [
@@ -696,7 +705,7 @@ class _StandardRun:
             checks=checks,
             passed=all(check.passed for check in checks),
             validation_level=(
-                ValidationLevel.CHECKED
+                calibration_level(self.task, self.data_root, capabilities.environment_digest)
                 if all(check.passed for check in checks)
                 else ValidationLevel.UNVERIFIED
             ),
@@ -890,6 +899,11 @@ class _StandardRun:
                     case_input=case.input,
                 )
                 self._save_json("plans/requests", f"{case_id}.json", request)
+        import hashlib
+        files = {path.relative_to(self.run_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                 for directory in ("plans", "generated") for path in (self.run_dir / directory).rglob("*")
+                 if path.is_file() and path.name != "replay_manifest.json"}
+        self._save_json("plans", "replay_manifest.json", {"environment_digest": self.backend.capabilities().environment_digest, "file_hashes": files})
         self._event(
             WorkflowState.FROZEN,
             "PLAN_FROZEN",
@@ -901,6 +915,12 @@ class _StandardRun:
         self._enter(WorkflowState.EXECUTING)
         assert self.plan is not None and self.build_plan is not None
         self._check_cancel()
+        import hashlib
+        frozen = json.loads((self.run_dir / "plans/replay_manifest.json").read_text(encoding="utf-8"))
+        for relative, digest in frozen["file_hashes"].items():
+            target = self.run_dir / relative
+            if not target.resolve().is_relative_to(self.run_dir.resolve()) or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                raise InvalidInputError(f"冻结工件已变更：{relative}")
 
         compile_result = self._compile()
         self.compile_result = compile_result
@@ -922,7 +942,7 @@ class _StandardRun:
         if self.legacy is not None:
             self._run_legacy_case(exe)
             return
-        deadline = time.monotonic() + self.task.document.limits.total_wall_ms / 1000.0
+        deadline = self.deadline
         for case_id in self.task.task_spec.case_ids:
             self._check_cancel()
             if time.monotonic() > deadline:
@@ -936,7 +956,7 @@ class _StandardRun:
         assert self.build_plan is not None
         build_dir = self.run_dir / "generated" / "build"
         build_dir.mkdir(parents=True, exist_ok=True)
-        limits = self.task.document.limits
+        limits = self._remaining_limits(self.task.document.limits)
 
         request = CompileRequest(
             build_plan=self.build_plan,
@@ -950,9 +970,11 @@ class _StandardRun:
             work_dir=build_dir,
             limits=limits,
             env=minimal_environment(build_dir),
+            cancelled=lambda: (self.run_dir / "CANCEL").exists(),
         )
         started = time.monotonic()
         outcome: CompileOutcome = self.backend.compile(request)
+        self._check_cancel()
         duration = int((time.monotonic() - started) * 1000)
         self.evidence_refs.append("evidence/compile/stdout.txt")
         self.evidence_refs.append("evidence/compile/stderr.txt")
@@ -991,7 +1013,7 @@ class _StandardRun:
     def _run_case(self, case_id: str, exe: Path) -> None:
         assert self.plan is not None
         case = self.task.cases[case_id]
-        limits = effective_limits(self.task.document.limits, case.limits_override)
+        limits = self._remaining_limits(effective_limits(self.task.document.limits, case.limits_override))
         case_dir = self.run_dir / "evidence" / "cases" / case_id
         work_dir = case_dir / "work"
         if work_dir.exists():
@@ -1029,8 +1051,10 @@ class _StandardRun:
                     work_dir=work_dir,
                     limits=limits,
                     env=minimal_environment(work_dir),
+                    cancelled=lambda: (self.run_dir / "CANCEL").exists(),
                 )
             )
+            self._check_cancel()
             termination = outcome.termination
             exit_code = outcome.exit_code
             wall_ms = outcome.wall_ms
@@ -1102,7 +1126,7 @@ class _StandardRun:
         assert self.plan is not None and self.legacy is not None
         probe = self.legacy
         case_id = probe.case_id
-        limits = effective_limits(self.task.document.limits, None)
+        limits = self._remaining_limits(effective_limits(self.task.document.limits, None))
         case_dir = self.run_dir / "evidence" / "cases" / case_id
         work_dir = case_dir / "work"
         if work_dir.exists():
@@ -1141,8 +1165,10 @@ class _StandardRun:
                     work_dir=work_dir,
                     limits=limits,
                     env=minimal_environment(work_dir),
+                    cancelled=lambda: (self.run_dir / "CANCEL").exists(),
                 )
             )
+            self._check_cancel()
             termination = outcome.termination
             exit_code = outcome.exit_code
             wall_ms = outcome.wall_ms
@@ -1260,6 +1286,7 @@ class _StandardRun:
             task_published=published,
             assertions_confirmed=confirmed,
             execution_backend_attested=self.attested,
+            original_build_confirmed=(self.compile_result is not None and self.compile_result.fault_owner is FaultOwner.SUBMISSION and self.legacy is None),
         )
         evidence = list(dict.fromkeys(ref for ref in self.evidence_refs if ref))
         if self.plan is not None:
@@ -1436,33 +1463,8 @@ class _StandardRun:
         ]
 
     def _legacy_coverage(self, case_results: list[CaseResult]) -> CoverageReport:
-        """单文件适配只计划一条探针用例，覆盖统计也只围绕它计算。"""
-        assert self.legacy is not None
-        case_id = self.legacy.case_id
-        assertion_id = self.legacy.assertion_id
-        completed = [result for result in case_results if result.note != "NOT_RUN"]
-        completed_ids = [result.case_id for result in completed]
-        executed_assertions = [
-            assertion.assertion_id
-            for result in completed
-            for assertion in result.assertion_results
-        ]
-        missed_cases = [case_id] if case_id not in completed_ids else []
-        missing_assertions = [assertion_id] if assertion_id not in executed_assertions else []
-        return CoverageReport(
-            planned_cases=[case_id],
-            completed_cases=completed_ids,
-            missed_cases=missed_cases,
-            planned_partitions=[],
-            covered_partitions=[],
-            missing_partitions=[],
-            planned_assertions=[assertion_id],
-            executed_assertions=[
-                item for item in [assertion_id] if item in executed_assertions
-            ],
-            missing_assertions=missing_assertions,
-            complete=not missed_cases and not missing_assertions,
-        )
+        """Legacy diagnostics cannot shrink the original task's required coverage."""
+        return compute_coverage(self.task.method, {c: self.task.cases[c] for c in self.task.task_spec.case_ids}, case_results)
 
     def _judge_case(self, case: TaskCase, observation: Observation) -> CaseResult:
         evidence = [
@@ -1635,9 +1637,19 @@ class _StandardRun:
             size=artifact.size,
         )
 
+    def _remaining_limits(self, limits):
+        self._check_cancel()
+        remaining = max(1, int((self.deadline - time.monotonic()) * 1000))
+        return limits.model_copy(update={
+            "compile_wall_ms": min(limits.compile_wall_ms, remaining),
+            "case_wall_ms": min(limits.case_wall_ms, remaining),
+        })
+
     def _check_cancel(self) -> None:
         if (self.run_dir / "CANCEL").is_file():
             raise CancelledError("收到取消请求")
+        if time.monotonic() >= self.deadline:
+            raise BudgetExceededError("整次测评活动时间预算耗尽")
 
 
 # `parse_response` 的返回值与 mock 分支共用一个极小的取 actual 接口。

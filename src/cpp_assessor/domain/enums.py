@@ -169,6 +169,7 @@ class IsolationLevel(StrEnum):
     HOST_PROCESS = "HOST_PROCESS"
     WINDOWS_SANDBOX = "WINDOWS_SANDBOX"
     VM = "VM"
+    WASM_RUNTIME = "WASM_RUNTIME"
 
 
 class ValidationLevel(StrEnum):

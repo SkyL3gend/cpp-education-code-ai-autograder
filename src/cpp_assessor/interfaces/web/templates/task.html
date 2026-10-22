@@ -1,134 +1,115 @@
 {% extends "base.html" %}
+{% from '_ui.html' import steps, environment %}
+{% set is_llm = llm_mode|default(false) %}
+{% set upload_blocked = settings.backend in ['local', 'local_win32_job'] or (settings.backend == 'wasm_pilot' and (not settings.allow_unattested or task.task_id != 't1_phone_validation')) %}
 {% block title %}{{ task.task_spec.title }}{% endblock %}
 {% block content %}
-
-<p class="crumbs"><a href="/standard">{{ t('nav.tasks') }}</a> / <span class="mono">{{ task.task_id }}@{{ task.version }}</span></p>
-
+<p class="crumbs">
+<a href="{{ '/llm' if is_llm else '/standard' }}">← {{ t('ui.change_task') }}</a>
+<span>{{ t('modes.llm.title') if is_llm else t('modes.standard.title') }}</span>
+</p>
+{{ steps(2, t) }}
 <section class="hero">
-  <div class="hero-head">
-    <h1>{{ task.task_spec.title }}</h1>
-    <span class="badge {{ 'published' if task.task_spec.publication_status.value == 'PUBLISHED' else 'draft' }}">
-      {{ label('publication', task.task_spec.publication_status.value) }}
-    </span>
-  </div>
-  <p>{{ task.task_spec.description }}</p>
+<h1>{{ task.task_spec.title }}</h1>
+<p>{{ task.task_spec.description }}</p>
 </section>
-
-<div class="two-col">
-  <section class="panel">
-    <div class="panel-head"><h2>{{ t('task.rules') }}</h2></div>
-    <ol class="rules">
-      {% for rule in task.task_spec.rules %}
-      <li><span class="mono tiny">{{ rule.rule_id }}</span> {{ rule.statement }}</li>
-      {% endfor %}
-    </ol>
-  </section>
-
-  <section class="panel">
-    <div class="panel-head"><h2>{{ t('task.method') }}</h2></div>
-    <table class="kv">
-      <tr><th>{{ t('task.method.id') }}</th><td class="mono small">{{ task.method.method_id }}@{{ task.method.version }}</td></tr>
-      <tr><th>{{ t('task.method.operation') }}</th><td class="mono small">{{ task.template.operation_id }}</td></tr>
-      <tr><th>{{ t('task.method.level') }}</th><td>{{ task.method.subject_level.value }}</td></tr>
-      <tr><th>{{ t('task.method.partitions') }}</th><td>{{ task.method.input_partitions|length }}</td></tr>
-      <tr><th>{{ t('task.method.assertions') }}</th><td>{{ task.method.assertions|length }}</td></tr>
-      <tr><th>{{ t('task.method.base') }}</th><td class="mono small">{{ task.document.project_ref.project_id }}@{{ task.document.project_ref.version }}
-        <a class="inline-link" href="/tasks/{{ task.task_id }}@{{ task.version }}/base.zip">{{ t('task.download_base') }}</a></td></tr>
-    </table>
-  </section>
+{{ environment(settings, t) }}
+<div class="submission-layout">
+<section class="panel submission-panel" id="submit">
+<div class="panel-head">
+<h2>{{ t('task.submit.title') }}</h2>
+<span class="badge draft">{{ t('ui.step_label', number=2) }}</span>
 </div>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>{{ t('task.cases') }}</h2>
-    <span class="muted small">{{ t('task.cases.count', count=case_rows|length) }} · {{ t('task.cases.note') }}</span>
-  </div>
-  <table class="table">
-    <thead>
-      <tr><th>{{ t('task.case.id') }}</th><th>{{ t('task.case.purpose') }}</th><th>{{ t('task.case.partitions') }}</th><th>{{ t('task.case.rules') }}</th><th>{{ t('task.case.assertions') }}</th><th>{{ t('task.case.oracle') }}</th></tr>
-    </thead>
-    <tbody>
-      {% for row in case_rows %}
-      <tr>
-        <td class="mono small">{{ row.case_id }}</td>
-        <td>{{ label('purpose', row.purpose) }}</td>
-        <td class="mono tiny">{{ row.partitions }}</td>
-        <td class="mono tiny">{{ row.rules }}</td>
-        <td class="mono tiny">{{ row.assertions }}</td>
-        <td>{{ label('oracle', row.oracle_status) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% if is_llm %}<p class="muted small">{{ t('ui.llm.upload') }}</p>{% else %}<p class="muted small">{{ t('ui.standard.upload') }}</p>
+<a class="download-base" href="/tasks/{{ task.task_id }}@{{ task.version }}/base.zip">↓ {{ t('task.download_base') }}</a>
+<p class="small muted">{{ t('ui.own_project') }} <a href="/llm/tasks/{{ task.task_id }}@{{ task.version }}">{{ t('modes.llm.title') }} →</a>
+</p>{% endif %}
+<form method="post" action="{{ form_action|default('/runs') }}" enctype="multipart/form-data" class="form" data-submit-form data-busy-label="{{ t('ui.busy') }}">
+<input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
+<fieldset class="form-fields" {% if upload_blocked %}disabled{% endif %}>
+<legend class="sr-only">{{ t('task.submit.title') }}</legend>
+{% if is_llm %}<label class="field">
+<span>{{ t('llm.key.label') }}{% if key_configured %} · {{ t('ui.optional') }}{% endif %}</span>
+<input type="password" name="api_key" autocomplete="off" placeholder="{{ t('llm.key.placeholder') }}" {% if not key_configured %}required{% endif %}>
+</label>
+<p class="muted tiny">{{ t('llm.key.hint') }} {{ t('ui.code_sent') }}</p>{% endif %}
+<label class="field upload-field">
+<span>{{ t('task.submit.file') }}</span>
+<input type="file" name="submission" accept=".zip,.cpp,.h,.hpp" required>
+<span class="muted small">{{ t('ui.file_hint') }}</span>
+</label>
+{% if is_llm %}<details class="details optional-fields">
+<summary>{{ t('ui.optional_before') }}</summary>
+<label class="field">
+<span>{{ t('task.submit.target_before') }}</span>
+<input type="file" name="target_before" accept=".zip">
+</label>
+</details>{% endif %}
+<button class="button primary submit-button" type="submit">{{ t('ui.upload_unavailable') if upload_blocked else t('ui.mock_submit') if settings.backend == 'mock' else t('task.submit.button') }}</button>
+</fieldset>{% if upload_blocked %}<p class="muted small">{{ t('ui.upload_help') }}</p>{% endif %}</form>
 </section>
-
-<div class="two-col">
-  <section class="panel">
-    <div class="panel-head"><h2>{{ t('task.demo.title') }}</h2></div>
-    <p class="muted small">{{ t('task.demo.note') }}</p>
-    <form method="post" action="/runs" class="form">
-      <input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
-      <label class="field">
-        <span>{{ t('task.demo.variant') }}</span>
-        <select name="variant" required>
-          {% for variant in variants %}
-          <option value="{{ variant.variant_id }}">
-            {{ variant.variant_id }} · {{ label('role', variant.role) }} · {{ label('assessment', variant.expected_assessment_status) }}
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-      <button class="button" type="submit">{{ t('task.demo.run') }}</button>
-    </form>
-  </section>
-
-  <section class="panel">
-    <div class="panel-head"><h2>{{ t('task.submit.title') }}</h2>
-      {% if llm_mode %}<span class="badge draft">{{ t('llm.badge') }}</span>{% endif %}
-    </div>
-    <p class="muted small">{{ t('task.submit.note') }}</p>
-    <p class="muted small">{{ t('task.submit.note2') }}</p>
-    {% if llm_mode %}
-    <p class="muted small">{{ t('llm.task.note') }}</p>
-    {% endif %}
-    <form method="post" action="{{ form_action|default('/runs') }}" enctype="multipart/form-data" class="form">
-      <input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
-      {% if llm_mode %}
-      <label class="field">
-        <span>{{ t('llm.key.label') }}</span>
-        <input type="password" name="api_key" autocomplete="off" placeholder="{{ t('llm.key.placeholder') }}">
-      </label>
-      <p class="muted tiny">{{ t('llm.key.hint') }}{% if key_configured %} {{ t('llm.key.configured') }}{% endif %}</p>
-      {% endif %}
-      <label class="field">
-        <span>{{ t('task.submit.file') }}</span>
-        <input type="file" name="submission" accept=".zip,.cpp,.h,.hpp" required>
-      </label>
-      <label class="field">
-        <span>{{ t('task.submit.target_before') }}</span>
-        <input type="file" name="target_before" accept=".zip">
-      </label>
-      <button class="button primary" type="submit">{{ t('task.submit.button') }}</button>
-    </form>
-  </section>
+<aside>
+<section class="panel">
+<div class="panel-head">
+<h2>{{ t('task.rules') }}</h2>
 </div>
-
-<section class="panel">
-  <div class="panel-head"><h2>{{ t('task.variants.title') }}</h2></div>
-  <table class="table">
-    <thead><tr><th>{{ t('task.variants.variant') }}</th><th>{{ t('task.variants.role') }}</th><th>{{ t('task.variants.desc') }}</th><th>{{ t('task.variants.expect') }}</th><th>{{ t('task.variants.must_fail') }}</th></tr></thead>
-    <tbody>
-      {% for variant in variants %}
-      <tr>
-        <td class="mono small">{{ variant.variant_id }}</td>
-        <td>{{ label('role', variant.role) }}</td>
-        <td>{{ variant.description }}</td>
-        <td><span class="badge {{ variant.expected_assessment_status|lower }}">{{ label('assessment', variant.expected_assessment_status) }}</span></td>
-        <td class="mono tiny">{{ variant.must_fail_cases|join(', ') if variant.must_fail_cases else '—' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<ol class="rules">{% for rule in task.task_spec.rules %}<li>{{ rule.statement }}</li>{% endfor %}</ol>
+<p class="muted small">{{ t('ui.check_count', count=case_rows|length) }}</p>
 </section>
-
+{% if not is_llm %}<section class="panel demo-panel" id="demo">
+<h2>{{ t('task.demo.title') }}</h2>
+<p class="muted small">{{ t('task.demo.note') }}</p>
+<form method="post" action="/runs" class="form" data-submit-form data-busy-label="{{ t('ui.busy') }}">
+<input type="hidden" name="task_ref" value="{{ task.task_id }}@{{ task.version }}">
+<label class="field">
+<span>{{ t('task.demo.variant') }}</span>
+<select name="variant" required>{% for variant in variants %}<option value="{{ variant.variant_id }}">{{ t('ui.variant.correct') if variant.role == 'CORRECT' else t('ui.variant.faulty') }}</option>{% endfor %}</select>
+</label>
+<button class="button" type="submit" {% if settings.backend != 'mock' and not settings.allow_unattested %}disabled{% endif %}>{{ t('task.demo.run') }}</button>
+</form>
+</section>
+{% endif %}
+</aside>
+</div>
+<details class="panel details technical">
+<summary>{{ t('ui.task_details') }} <span class="muted small">{{ task.task_id }}@{{ task.version }}</span>
+</summary>
+<h3>{{ t('task.method') }}</h3>
+<table class="kv">
+<tr>
+<th>{{ t('task.method.id') }}</th>
+<td>{{ task.method.method_id }}@{{ task.method.version }}</td>
+</tr>
+<tr>
+<th>{{ t('task.method.operation') }}</th>
+<td>{{ task.template.operation_id }}</td>
+</tr>
+<tr>
+<th>{{ t('task.method.level') }}</th>
+<td>{{ task.method.subject_level.value }}</td>
+</tr>
+</table>
+<h3>{{ t('task.cases') }}</h3>
+<p class="muted small">{{ t('task.cases.note') }}</p>
+<div class="table-scroll">
+<table class="table">
+<thead>
+<tr>
+<th>{{ t('task.case.id') }}</th>
+<th>{{ t('task.case.partitions') }}</th>
+<th>{{ t('task.case.assertions') }}</th>
+<th>{{ t('task.case.oracle') }}</th>
+</tr>
+</thead>
+<tbody>{% for row in case_rows %}<tr>
+<td class="mono small">{{ row.case_id }}</td>
+<td>{{ row.partitions }}</td>
+<td>{{ row.assertions }}</td>
+<td>{{ label('oracle', row.oracle_status) }}</td>
+</tr>{% endfor %}</tbody>
+</table>
+</div>
+{% if not is_llm %}<h3>{{ t('task.variants.title') }}</h3>{% for variant in variants %}<p class="small">
+<strong>{{ variant.variant_id }}</strong> · {{ variant.description }}</p>{% endfor %}{% endif %}
+</details>
 {% endblock %}

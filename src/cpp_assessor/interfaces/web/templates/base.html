@@ -7,24 +7,23 @@
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
 </head>
 <body>
+<a class="skip-link" href="#main-content">{{ t('ui.skip') }}</a>
 <header class="topbar">
   <a class="brand" href="/">{{ t('brand') }}</a>
-  <nav class="nav">
-    <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">{{ t('nav.modes') }}</a>
-    <a href="/standard" class="{{ 'active' if request.url.path.startswith('/standard') or request.url.path.startswith('/tasks') else '' }}">{{ t('nav.tasks') }}</a>
-    <a href="/batch" class="{{ 'active' if request.url.path.startswith('/batch') else '' }}">{{ t('nav.batch') }}</a>
+  <nav class="nav" aria-label="{{ t('ui.nav') }}">
+    <a href="/" class="{{ 'active' if request.url.path == '/' or request.url.path.startswith('/llm') else '' }}">{{ t('ui.start_assessment') }}</a>
     <a href="/runs" class="{{ 'active' if request.url.path == '/runs' or request.url.path.startswith('/runs/') else '' }}">{{ t('nav.runs') }}</a>
-    <a href="/reference" class="{{ 'active' if request.url.path.startswith('/reference') else '' }}">{{ t('nav.reference') }}</a>
   </nav>
   <a class="lang-switch" href="{{ switch_url }}" title="{{ t('nav.lang_title') }}">{{ t('nav.lang') }}</a>
   <span class="version">v{{ app_version }}</span>
 </header>
-<main class="wrap">
+<main class="wrap" id="main-content">
 {% block content %}{% endblock %}
 </main>
 <footer class="footer">
   {{ t('footer') }}
 </footer>
+<script src="{{ url_for('static', path='ui.js') }}" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

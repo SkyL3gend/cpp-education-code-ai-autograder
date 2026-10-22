@@ -534,3 +534,5 @@ class CalibrationRecord(StrictModel):
     executed_at: str
     outcomes: list[CalibrationOutcome]
     passed: bool
+    environment_digest: Sha256 | None = None
+    backend_id: str | None = None

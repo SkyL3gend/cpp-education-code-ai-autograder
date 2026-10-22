@@ -9,9 +9,9 @@ from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 SRC_DIR = PACKAGE_DIR.parent
-PROJECT_ROOT = SRC_DIR.parent
+PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else SRC_DIR.parent
 
-ASSESSOR_VERSION = "0.5.1"
+ASSESSOR_VERSION = "0.6.0"
 SCHEMA_VERSION = "1.0"
 PROTOCOL_VERSION = "1.0"
 

@@ -152,7 +152,7 @@ class Database:
         self.initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30.0)
+        connection = sqlite3.connect(self.path, timeout=30.0, uri=True)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
@@ -165,6 +165,18 @@ class Database:
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
                 (DB_SCHEMA_VERSION,),
             )
+        legacy = self.path.with_name("assessor.db")
+        if self.path.name == "app.sqlite3" and legacy.is_file():
+            with self._connect() as connection:
+                connection.execute("ATTACH DATABASE ? AS legacy", (legacy.resolve().as_uri() + "?mode=ro",))
+                for table in ("runs", "run_events", "artifacts"):
+                    exists = connection.execute("SELECT 1 FROM legacy.sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+                    if exists:
+                        columns = [r[1] for r in connection.execute(f"PRAGMA main.table_info({table})")]
+                        old_columns = {r[1] for r in connection.execute(f"PRAGMA legacy.table_info({table})")}
+                        if set(columns) <= old_columns:
+                            names = ",".join(columns)
+                            connection.execute(f"INSERT OR IGNORE INTO main.{table} ({names}) SELECT {names} FROM legacy.{table}")
 
     # -- runs ---------------------------------------------------------------
     def create_run(

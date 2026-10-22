@@ -26,3 +26,6 @@ data/
 .env.*
 *.env
 secrets/
+
+# Downloaded optional WASI toolchain (distributed in portable releases)
+tools/wasi-sdk/

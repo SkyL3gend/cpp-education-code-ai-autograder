@@ -1,49 +1,55 @@
 {% extends "base.html" %}
+{% from '_ui.html' import steps, environment %}
 {% block title %}{{ t('modes.title') }}{% endblock %}
 {% block content %}
-
-<section class="hero">
-  <h1>{{ t('modes.heading') }}</h1>
-  <p>{{ t('modes.intro') }}</p>
+<section class="hero welcome">
+<span class="eyebrow">{{ t('ui.eyebrow') }}</span>
+<h1>{{ t('modes.heading') }}</h1>
+<p>{{ t('modes.intro') }}</p>
 </section>
-
+{{ steps(1, t) }}
 <section class="mode-grid">
-  <a class="mode-card" href="/standard">
-    <div class="mode-head">
-      <span class="mode-icon">A</span>
-      <span class="badge published">{{ t('nav.tasks') }}</span>
-    </div>
-    <h2>{{ t('modes.standard.title') }} <small class="muted">{{ t('modes.standard.sub') }}</small></h2>
-    <p>{{ t('modes.standard.desc') }}</p>
-    <span class="button primary">{{ t('modes.standard.enter') }}</span>
-  </a>
-
-  <a class="mode-card" href="/llm">
-    <div class="mode-head">
-      <span class="mode-icon">B</span>
-      <span class="badge published">{{ t('modes.llm.soon') }}</span>
-    </div>
-    <h2>{{ t('modes.llm.title') }} <small class="muted">{{ t('modes.llm.sub') }}</small></h2>
-    <p>{{ t('modes.llm.desc') }}</p>
-    <span class="button primary">{{ t('modes.llm.enter') }}</span>
-  </a>
+<a class="mode-card recommended" href="/standard">
+<div class="mode-head">
+<span class="mode-icon" aria-hidden="true">01</span>
+<span class="badge running">{{ t('ui.recommended') }}</span>
+</div>
+<h2>{{ t('ui.standard.title') }}</h2>
+<p>{{ t('modes.standard.desc') }}</p>
+<span class="mode-caption">{{ t('modes.standard.title') }} · {{ t('ui.no_key') }}</span>
+<span class="button primary">{{ t('modes.standard.enter') }} →</span>
+</a>
+<a class="mode-card" href="/llm">
+<div class="mode-head">
+<span class="mode-icon" aria-hidden="true">02</span>
+<span class="badge draft">{{ t('ui.exploratory') }}</span>
+</div>
+<h2>{{ t('ui.llm.title') }}</h2>
+<p>{{ t('modes.llm.desc') }}</p>
+<span class="mode-caption">{{ t('modes.llm.title') }} · {{ t('ui.needs_key') }}</span>
+<span class="button">{{ t('modes.llm.enter') }} →</span>
+</a>
 </section>
-
-<p class="muted small mode-note">{{ t('modes.note') }}</p>
-
-<section class="panel">
-  <div class="panel-head"><h2>{{ t('index.backend.title') }}</h2>
-    <span class="mono small">{{ capabilities.backend_id }}</span>
-  </div>
-  <table class="kv">
-    <tr><th>{{ t('index.backend.isolation') }}</th><td>{{ capabilities.isolation }}</td></tr>
-    <tr><th>{{ t('index.backend.limits') }}</th>
-      <td>{{ '✓' if capabilities.cpu_limit else '✗' }} / {{ '✓' if capabilities.memory_limit else '✗' }} / {{ '✓' if capabilities.process_limit else '✗' }}</td></tr>
-    <tr><th>{{ t('index.backend.wall') }}</th>
-      <td>{{ '✓' if capabilities.wall_timeout else '✗' }} / {{ '✓' if capabilities.tree_kill else '✗' }}</td></tr>
-    <tr><th>{{ t('index.backend.netfs') }}</th>
-      <td>{{ '✓' if capabilities.network_block else '✗' }} / {{ '✓' if capabilities.filesystem_isolation else '✗' }}</td></tr>
-  </table>
-</section>
-
+{{ environment(settings, t) }}
+<div class="quick-links">
+<a href="/runs">{{ t('ui.history') }} →</a>
+<a href="/batch">{{ t('index.batch_link') }}</a>
+</div>
+<details class="panel details technical">
+<summary>{{ t('ui.environment.details') }}</summary>
+<table class="kv">
+<tr>
+<th>{{ t('index.backend.title') }}</th>
+<td>{{ capabilities.backend_id }}</td>
+</tr>
+<tr>
+<th>{{ t('index.backend.isolation') }}</th>
+<td>{{ capabilities.isolation }}</td>
+</tr>
+<tr>
+<th>{{ t('index.backend.netfs') }}</th>
+<td>{{ t('yes') if capabilities.network_block else t('no') }} / {{ t('yes') if capabilities.filesystem_isolation else t('no') }}</td>
+</tr>
+</table>
+</details>
 {% endblock %}

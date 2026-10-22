@@ -108,12 +108,19 @@ def parse_response(
             last_line = line.strip()
             break
 
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"重复 JSON 字段：{key}")
+            result[key] = value
+        return result
     try:
-        envelope = json.loads(last_line)
-    except json.JSONDecodeError as exc:
+        envelope = json.loads(last_line, object_pairs_hook=unique_object)
+    except ValueError as exc:
         return _fail(
             ProtocolStatus.MISSING,
-            f"标准输出最后一行不是合法 JSON 观测：{exc.msg}",
+            f"标准输出最后一行不是合法 JSON 观测：{exc}",
             FaultOwner.UNKNOWN,
         )
 

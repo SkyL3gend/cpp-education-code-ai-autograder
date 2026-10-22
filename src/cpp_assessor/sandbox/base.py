@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from typing import Callable
 
 from ..domain.enums import CompileStatus, FaultOwner, Termination
 from ..domain.models import BuildPlan, ResourceLimits, SandboxCapabilities
@@ -25,6 +26,7 @@ class CompileRequest:
     work_dir: Path
     limits: ResourceLimits
     env: dict[str, str] = field(default_factory=dict)
+    cancelled: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,7 @@ class RunRequest:
     work_dir: Path
     limits: ResourceLimits
     env: dict[str, str] = field(default_factory=dict)
+    cancelled: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)

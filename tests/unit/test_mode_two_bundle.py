@@ -13,7 +13,7 @@ SOURCE = "main.cpp"
 
 
 def base_bundle(task_id: str = "t1_phone_validation") -> dict:
-    return {
+    payload = {
         "schema_version": "1.0",
         "task_id": task_id,
         "task_version": "1.0.0",
@@ -74,6 +74,9 @@ def base_bundle(task_id: str = "t1_phone_validation") -> dict:
         "coverage_gaps": [],
         "notes": "测试用",
     }
+    from tests.verifier_fixtures import attach_evidence
+    return attach_evidence(payload, load_task(TASK_REF), {SOURCE: "int main() { return 0; }"}, SOURCE, "main")
+
 
 
 def validate(payload: dict):
@@ -161,3 +164,23 @@ def test_expected_values_are_rejected() -> None:
     payload["observer"]["params"]["expected"] = "PASS"
     result = validate(payload)
     assert any("不允许出现" in problem and "/observer/params/expected" in problem for problem in result.problems)
+
+def test_explicit_gap_is_not_a_complete_migration():
+    payload = base_bundle()
+    payload["migration_matrix"][0]["status"] = "gap"
+    payload["coverage_gaps"] = ["Missing actual saved records"]
+    assert not validate(payload).passed
+
+def test_arbitrary_compiler_flags_and_absolute_outputs_are_rejected():
+    payload = base_bundle()
+    payload["build"]["artifact_name"] = "C:/outside.exe"
+    payload["build"]["compiler_flags"] = ["-fplugin=C:/outside.dll"]
+    result = validate(payload)
+    assert any("artifact_name" in p for p in result.problems)
+    assert any("编译选项" in p for p in result.problems)
+
+def test_reference_learning_and_source_evidence_are_required():
+    payload = base_bundle()
+    del payload["reference_learning"]
+    payload["source_bindings"] = []
+    assert not validate(payload).passed

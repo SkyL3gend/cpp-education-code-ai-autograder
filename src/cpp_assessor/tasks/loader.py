@@ -576,11 +576,16 @@ def compute_package_hash(task_dir: Path, project_root: Path | None, task_library
             relative = path.relative_to(root).as_posix()
             if relative.startswith("variants/") and label == "task":
                 pass
+            digest = _file_sha256(path)
+            if label == "task" and relative == "task.json":
+                content = _read_json(path)
+                content["task_spec"].pop("publication_status", None)
+                digest = sha256_hex(canonical_json(content).encode("utf-8"))
             entries.append(
                 {
                     "scope": label,
                     "path": relative,
-                    "sha256": _file_sha256(path),
+                    "sha256": digest,
                 }
             )
     return sha256_hex(canonical_json(entries).encode("utf-8"))
@@ -630,6 +635,9 @@ def load_task(
         for case in (TaskCase.model_validate(item) for item in raw_cases["cases"])
     }
     _check_publication(document.task_spec, allow_draft)
+    publication = task_library / "publications" / document.task_spec.task_id / f"{document.task_spec.version}.json"
+    if publication.is_file() and _read_json(publication).get("package_hash") != validation.package_hash:
+        raise TaskPackageError("已发布版本内容已变化；请创建新版本，不能覆盖原发布资产")
 
     project_root = (task_library / document.project_ref.root).resolve()
     harness_dir = (task_library / document.build.harness_include_dir).resolve()
@@ -695,6 +703,17 @@ def publish_task(task_dir: Path, task_library: Path | None = None) -> dict[str, 
         )
     path = Path(task_dir).resolve() / "task.json"
     payload = _read_json(path)
+    from .calibration import calibration_level
+    from ..orchestrator.runner import make_backend
+    task = load_task(f"{payload['task_spec']['task_id']}@{payload['task_spec']['version']}", task_library=task_library, allow_draft=True)
+    backend = make_backend("local")
+    if calibration_level(task, config.data_dir(), backend.capabilities().environment_digest) is not ValidationLevel.CALIBRATED:
+        raise TaskPackageError("发布需要当前内容哈希和环境的正确/缺陷版本校准记录；先运行 tools/calibrate.py")
+    publication = task_library / "publications" / task.task_id / f"{task.version}.json"
+    publication.parent.mkdir(parents=True, exist_ok=True)
+    if not publication.exists():
+        with publication.open("x", encoding="utf-8") as handle:
+            json.dump({"task_id": task.task_id, "version": task.version, "package_hash": task.package_hash, "environment_digest": backend.capabilities().environment_digest}, handle, ensure_ascii=False, indent=2)
     payload["task_spec"]["publication_status"] = PublicationStatus.PUBLISHED.value
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

@@ -54,9 +54,14 @@ def evaluate(
             if not getattr(capabilities, capability_field):
                 missing.append(capability_field)
     reasons: list[str] = []
-    if capabilities.isolation is IsolationLevel.NONE:
+    for field in ("process_limit", "clean_reset", "filesystem_isolation", "network_block"):
+        if field not in required:
+            required.append(field)
+        if not getattr(capabilities, field) and field not in missing:
+            missing.append(field)
+    if capabilities.isolation not in {IsolationLevel.WINDOWS_SANDBOX, IsolationLevel.VM}:
         missing.append("isolation")
-        reasons.append("后端声明不做任何隔离")
+        reasons.append("真实提交需要虚拟化隔离；宿主进程资源限制不构成隔离")
     if missing:
         reasons.append(f"缺少必要能力：{', '.join(missing)}")
     attested = not missing

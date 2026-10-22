@@ -23,7 +23,7 @@ from .base import CompileOutcome, CompileRequest, RunOutcome, RunRequest
 from .win32 import JobObject, minimal_environment, spawn_in_job
 
 BACKEND_ID = "local_win32_job"
-BACKEND_VERSION = "0.1.0"
+BACKEND_VERSION = "0.2.0"
 
 
 class LocalJobBackend:
@@ -35,7 +35,7 @@ class LocalJobBackend:
         self._notes.extend(
             [
                 "Windows Job Object 只约束资源与进程树，不提供网络与文件系统隔离",
-                "输出上限在执行后核验，超限按 OUTPUT_LIMIT 处理",
+                "输出合计和工作目录用量在运行中轮询；轮询不是虚拟磁盘硬配额",
             ]
         )
 
@@ -47,6 +47,7 @@ class LocalJobBackend:
                 "version": BACKEND_VERSION,
                 "os": platform.platform(),
                 "python": platform.python_version(),
+                "compiler": _compiler_digest(),
             }
         )
         return SandboxCapabilities(
@@ -106,6 +107,9 @@ class LocalJobBackend:
                     stdout_path=stdout_path,
                     stderr_path=stderr_path,
                     wall_timeout_ms=request.limits.compile_wall_ms,
+                    output_limit=request.limits.output_bytes,
+                    workdir_limit=request.limits.workdir_bytes,
+                    cancelled=request.cancelled,
                 )
         except OSError as exc:
             return CompileOutcome(
@@ -121,16 +125,16 @@ class LocalJobBackend:
         stdout = _read_text(stdout_path)
         stderr = _read_text(stderr_path)
         artifact_hash = sha256_hex(request.output.read_bytes()) if request.output.is_file() else None
-        if timed_out:
+        if accounting.stop_reason or timed_out:
             return CompileOutcome(
-                status=CompileStatus.TIMEOUT,
+                status=CompileStatus.CANCELLED if accounting.stop_reason == "CANCELLED" else CompileStatus.RESOURCE_LIMIT,
                 exit_code=exit_code,
                 stdout=stdout,
                 stderr=stderr,
                 duration_ms=wall_ms,
                 artifact_hash=None,
-                fault_owner=FaultOwner.SUBMISSION,
-                issue_code="COMPILE_WALL_TIME_LIMIT",
+                fault_owner=FaultOwner.UNKNOWN,
+                issue_code=accounting.stop_reason or "COMPILE_WALL_TIME_LIMIT",
             )
         if exit_code != 0 or artifact_hash is None:
             return CompileOutcome(
@@ -174,6 +178,9 @@ class LocalJobBackend:
                     stdout_path=request.stdout_path,
                     stderr_path=request.stderr_path,
                     wall_timeout_ms=request.limits.case_wall_ms,
+                    output_limit=request.limits.output_bytes,
+                    workdir_limit=request.limits.workdir_bytes,
+                    cancelled=request.cancelled,
                 )
         except OSError as exc:
             return RunOutcome(
@@ -199,10 +206,13 @@ class LocalJobBackend:
             cpu_ms=request.limits.case_cpu_ms,
             peak_memory=accounting.peak_job_memory,
             memory_bytes=request.limits.case_memory_bytes,
-            output_bytes=max(stdout_bytes, stderr_bytes),
+            output_bytes=stdout_bytes + stderr_bytes,
             output_limit=request.limits.output_bytes,
             events=events,
         )
+        if accounting.stop_reason:
+            termination = Termination(accounting.stop_reason)
+            events.append(f"监控触发 {accounting.stop_reason}，已终止进程树")
         fault_owner = (
             FaultOwner.SUBMISSION
             if termination
@@ -244,12 +254,11 @@ def _classify(
     if timed_out:
         events.append("墙钟超时，已终止进程树")
         return Termination.WALL_TIME_LIMIT
-    if accounting_user_ms >= cpu_ms * 0.95:
+    if exit_code != 0 and accounting_user_ms >= cpu_ms:
         events.append(f"CPU 时间 {accounting_user_ms}ms 触达上限 {cpu_ms}ms")
         return Termination.CPU_TIME_LIMIT
-    if peak_memory >= memory_bytes * 0.95:
-        events.append(f"峰值内存 {peak_memory}B 触达上限 {memory_bytes}B")
-        return Termination.MEMORY_LIMIT
+    # Peak usage near a limit is not proof that this limit terminated the job.
+    # Without a confirmed OS notification retain CRASH rather than guessing.
     if output_bytes > output_limit:
         events.append(f"输出 {output_bytes}B 超过上限 {output_limit}B")
         return Termination.OUTPUT_LIMIT
@@ -264,7 +273,8 @@ def _classify(
 def _read_text(path: Path, limit: int = 1 << 20) -> str:
     if not path.is_file():
         return ""
-    data = path.read_bytes()[:limit]
+    with path.open("rb") as stream:
+        data = stream.read(limit)
     for encoding in ("utf-8", "gbk"):
         try:
             return data.decode(encoding)
@@ -284,3 +294,8 @@ def compiler_available() -> bool:
 def find_compiler() -> Path | None:
     found = shutil.which("g++") or shutil.which("g++.exe")
     return Path(found) if found else None
+
+
+def _compiler_digest() -> str:
+    compiler = find_compiler()
+    return sha256_hex(compiler.read_bytes()) if compiler is not None else "unavailable"

@@ -232,6 +232,7 @@ def run_selfcheck(
     data_root: Path | None = None,
     source_kind: str = "upload",
     specs: tuple[CheckSpec, ...] = CHECKS,
+    trusted_fixture: bool = False,
 ) -> SelfCheckResult:
     """编译并实测一个 C++ 程序，返回报告（同时把报告与证据写到磁盘）。"""
     source = Path(source)
@@ -253,7 +254,12 @@ def run_selfcheck(
 
     backend = make_backend(backend_name)
     capabilities = backend.capabilities()
-    gate = evaluate(capabilities, CapabilityRequirements(), allow_unattested=True)
+    default_source = default_reference_source()
+    bundled_reference = source_kind == "reference" and default_source is not None and source.resolve() == default_source.resolve()
+    gate = evaluate(capabilities, CapabilityRequirements(), allow_unattested=bool(backend.simulated) or trusted_fixture or bundled_reference)
+    if not gate.allowed:
+        from ..domain.errors import BackendNotAttestedError
+        raise BackendNotAttestedError("观察型上传同样需要隔离后端；已拒绝在宿主运行")
     attested = bool(gate.attested and not backend.simulated)
 
     compiler_path = find_compiler()

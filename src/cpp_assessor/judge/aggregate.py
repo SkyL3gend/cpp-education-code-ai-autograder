@@ -79,7 +79,7 @@ def count_results(case_results: list[CaseResult], coverage: CoverageReport) -> R
                 not_compared_assertions += 1
     return ReportCounts(
         required_cases=len(coverage.planned_cases),
-        attempted_cases=len(coverage.completed_cases),
+        attempted_cases=sum(r.termination is not Termination.NOT_RUN for r in case_results),
         completed_cases=len(coverage.completed_cases),
         matched_cases=matched_cases,
         mismatched_cases=mismatched_cases,
@@ -100,6 +100,7 @@ def aggregate(
     task_published: bool,
     assertions_confirmed: bool,
     execution_backend_attested: bool,
+    original_build_confirmed: bool = False,
 ) -> Aggregation:
     reasons: list[str] = []
 
@@ -124,10 +125,11 @@ def aggregate(
             },
             deep=True,
         )
+        confirmed = original_build_confirmed and task_published and assertions_confirmed
         return Aggregation(
-            OverallStatus.FAIL,
-            execution_backend_attested,
-            ["SUBMISSION_COMPILE_ERROR"],
+            OverallStatus.FAIL if confirmed else OverallStatus.INCONCLUSIVE,
+            confirmed and execution_backend_attested,
+            ["SUBMISSION_COMPILE_ERROR" if confirmed else "BUILD_ATTRIBUTION_UNCONFIRMED"],
             count_results([], unattempted),
         )
 
@@ -145,7 +147,7 @@ def aggregate(
     subject_limit_hit = any(
         (
             result.termination in LIMIT_TERMINATIONS
-            and result.note not in {"ADAPTER_FAULT", "INFRA_FAULT"}
+            and result.note == "SUBJECT_FAULT"
         )
         or result.note == "SUBJECT_FAULT"
         for result in case_results
@@ -164,33 +166,18 @@ def aggregate(
         for assertion in result.assertion_results
     )
 
-    if subject_limit_hit:
-        # 合规调用中被测程序崩溃/超限是确定的失败：即使因此缺少观测、
-        # 覆盖不完整，也不能退化成 INCONCLUSIVE。
-        reasons = ["SUBJECT_CRASH_OR_LIMIT"]
-        eligible = execution_backend_attested
-        if not eligible:
-            reasons.append("EXECUTION_BACKEND_NOT_ATTESTED")
-        return Aggregation(
-            OverallStatus.FAIL,
-            eligible,
-            reasons,
-            count_results(case_results, coverage),
-            subject_limit_hit=True,
-        )
-
     blockers: list[str] = []
     if not task_published:
         blockers.append("TASK_NOT_PUBLISHED")
     if not assertions_confirmed:
         blockers.append("ASSERTIONS_NOT_CONFIRMED")
-    if validation_level is ValidationLevel.UNVERIFIED:
+    if validation_level not in {ValidationLevel.CALIBRATED, ValidationLevel.REVIEWED}:
         blockers.append(f"VALIDATION_LEVEL_{validation_level.value}")
     if not coverage.complete:
         blockers.append("COVERAGE_INCOMPLETE")
     if adapter_issue:
         blockers.append("ADAPTER_OR_INFRA_FAULT")
-    if assertions_not_compared:
+    if assertions_not_compared and not subject_limit_hit:
         # 有必需断言没比成（观测缺字段/类型不符）：不能算通过。
         blockers.append("ASSERTIONS_NOT_COMPARED")
 
@@ -204,8 +191,8 @@ def aggregate(
             adapter_issue=adapter_issue,
         )
 
-    if mismatched:
-        reasons.append("ASSERTION_MISMATCH")
+    if mismatched or subject_limit_hit:
+        reasons.append("SUBJECT_CRASH_OR_LIMIT" if subject_limit_hit else "ASSERTION_MISMATCH")
         eligible = execution_backend_attested
         if not eligible:
             reasons.append("EXECUTION_BACKEND_NOT_ATTESTED")

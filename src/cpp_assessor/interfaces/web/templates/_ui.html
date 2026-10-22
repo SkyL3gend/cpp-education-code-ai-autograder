@@ -1,0 +1,34 @@
+{% macro steps(current, t) %}
+<ol class="steps" aria-label="{{ t('ui.steps') }}">
+{% for key in ['ui.step.choose', 'ui.step.submit', 'ui.step.result'] %}
+<li class="{{ 'current' if loop.index == current else 'complete' if loop.index < current else '' }}" {% if loop.index == current %}aria-current="step"{% endif %}>
+<span class="step-number">{{ loop.index }}</span>
+<span>{{ t(key) }}</span>
+</li>
+{% endfor %}</ol>
+{% endmacro %}
+{% macro environment(settings, t) %}
+{% if settings.backend == 'wasm_pilot' %}
+<div class="environment-note"><div><strong>WebAssembly 试验 · 手机号校验</strong>
+<p>程序在受限 WASI 环境中运行，编译阶段必须启用 Windows AppContainer。本版本用于本机试测，尚未通过正式隔离验收或取得正式评分资格。</p>
+<p>上传包含业务实现与头文件的 C++ ZIP，或完整的单文件 C++ 程序；不支持 Windows 系统调用。</p></div></div>
+{% elif settings.backend == 'mock' %}
+<div class="environment-note">
+<span class="status-dot">
+</span>
+<div>
+<strong>{{ t('ui.env.mock') }}</strong>
+<p>{{ t('ui.env.mock.text') }}</p>
+</div>
+</div>
+{% elif settings.backend in ['local', 'local_win32_job'] %}
+<div class="environment-note">
+<span class="status-dot">
+</span>
+<div>
+<strong>{{ t('ui.env.local') }}</strong>
+<p>{{ t('ui.env.local.text') if settings.allow_unattested else t('ui.env.browse.text') }}</p>
+</div>
+</div>
+{% endif %}
+{% endmacro %}

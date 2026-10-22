@@ -26,14 +26,15 @@ def test_correct_variant_passes_but_is_not_grade_eligible(tmp_path):
             variant="correct",
             backend="local",
             allow_unattested=True,
+            trusted_fixture=True,
             data_dir=tmp_path,
         )
     )
     assert result.workflow_state is WorkflowState.COMPLETED
     assert result.execution_status is ExecutionStatus.COMPLETED
-    assert result.assessment_status is OverallStatus.PASS
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
     assert result.grade_eligible is False
-    assert result.exit_code == 0
+    assert result.exit_code == 3
     assert (result.run_dir / "objective_report.json").is_file()
     assert result.report is not None
     assert result.report.counts.matched_cases == 4
@@ -46,11 +47,12 @@ def test_faulty_variant_is_caught_by_non_digit_case(tmp_path):
             variant="faulty",
             backend="local",
             allow_unattested=True,
+            trusted_fixture=True,
             data_dir=tmp_path,
         )
     )
-    assert result.assessment_status is OverallStatus.FAIL
-    assert result.exit_code == 1
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
+    assert result.exit_code == 3
     failed_cases = {
         case.case_id
         for case in result.report.case_results
@@ -71,6 +73,7 @@ def test_compile_error_skips_cases_and_reports_submission_fault(tmp_path):
             submission=submission,
             backend="local",
             allow_unattested=True,
+            trusted_fixture=True,
             data_dir=tmp_path / "run_data",
         )
     )
@@ -79,37 +82,14 @@ def test_compile_error_skips_cases_and_reports_submission_fault(tmp_path):
     assert result.report.counts.attempted_cases == 0
 
 
-def test_unrelated_source_file_falls_back_to_observation_instead_of_invalid_input(tmp_path):
-    """提交与基准工程无关的单文件源码：编译运行后进入观察型适配。
-
-    程序没有菜单输出，探针取不到可核对事实，因此只能 INCONCLUSIVE；
-    关键是不能在入口处直接拒绝，也不能让运行卡在 REPORTING。"""
-    submission = tmp_path / "student"
-    submission.mkdir()
-    (submission / "unrelated.cpp").write_text(
-        "int main() { return 0; }\n", encoding="utf-8", newline="\n"
-    )
-    result = execute_standard_run(
-        RunOptions(
-            task_ref="t1_phone_validation@1.0.0",
-            submission=submission,
-            backend="local",
-            allow_unattested=True,
-            data_dir=tmp_path / "run_data",
-        )
-    )
-    assert result.workflow_state is WorkflowState.COMPLETED
-    assert result.execution_status is ExecutionStatus.COMPLETED
-    assert result.assessment_status is OverallStatus.INCONCLUSIVE
-    assert result.grade_eligible is False
-    assert (result.run_dir / "objective_report.json").is_file()
-    assert result.report is not None
-    assert result.report.counts.attempted_cases == 1
-    case = result.report.case_results[0]
-    assert case.case_id == "single_file_phone_non_digit"
-    assert case.comparison.value == "NOT_COMPARED"
-    assert case.note == "OBSERVATION_INCOMPLETE"
-    assert "单文件适配（观察型）" in (result.report.observations_note or "")
+def test_unrelated_source_is_rejected_without_silent_scope_change(tmp_path):
+    submission = tmp_path / "unrelated.cpp"
+    submission.write_text("int main(){return 0;}", encoding="utf-8")
+    result = execute_standard_run(RunOptions(task_ref="t1_phone_validation@1.0.0", submission=submission, backend="mock", data_dir=tmp_path/"data"))
+    assert result.execution_status is ExecutionStatus.INVALID_INPUT
+    assert result.assessment_status is OverallStatus.NOT_ASSESSED
+    assert result.report.counts.attempted_cases == 0
+    assert "LLM" in result.error
 
 
 def test_submission_with_wrapping_folder_still_matches_project(tmp_path):
@@ -132,6 +112,7 @@ def test_submission_with_wrapping_folder_still_matches_project(tmp_path):
             submission=submission,
             backend="local",
             allow_unattested=True,
+            trusted_fixture=True,
             data_dir=tmp_path / "run_data",
         )
     )
@@ -152,7 +133,7 @@ def test_mock_backend_marks_execution_as_simulated(tmp_path):
             data_dir=tmp_path,
         )
     )
-    assert result.assessment_status is OverallStatus.PASS
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
     assert result.grade_eligible is False
     assert result.report is not None
     assert "mock" in (result.report.observations_note or "")

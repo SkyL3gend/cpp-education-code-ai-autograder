@@ -36,6 +36,10 @@ _REDACT = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
 
 class LLMError(AssessorError):
     """模型不可用、返回不是 JSON、或超出重试次数。"""
+    def __init__(self, message: str, *, retryable: bool = True, code: str | None = None):
+        super().__init__(message)
+        self.retryable = retryable
+        self.code = code
 
 
 def redact(text: str) -> str:
@@ -141,6 +145,9 @@ class LLMClient:
         self.log_dir = Path(log_dir) if log_dir else None
         self.max_attempts = max(1, max_attempts)
         self.calls: list[dict[str, Any]] = []
+        self.checkpoint = lambda: None
+        self.deadline = float("inf")
+        self.transport_attempts = 0
 
     # -- 对外接口 ---------------------------------------------------------
 
@@ -153,14 +160,22 @@ class LLMClient:
         max_tokens: int | None = None,
     ) -> LLMResponse:
         last_error: str = ""
+        last_exception: LLMError | None = None
         for attempt in range(1, self.max_attempts + 1):
+            self.checkpoint()
+            if self.transport_attempts >= 18:
+                raise LLMError("LLM 传输请求预算耗尽", retryable=False)
+            self.transport_attempts += 1
             try:
                 response = self._post(system, user, max_tokens or self.settings.max_tokens, call_name)
             except LLMError as exc:
                 last_error = str(exc)
-                if attempt >= self.max_attempts:
+                last_exception = exc
+                if not exc.retryable or attempt >= self.max_attempts:
                     break
-                time.sleep(1.5 * attempt)
+                for _ in range(15 * attempt):
+                    self.checkpoint()
+                    time.sleep(0.1)
                 continue
             text = _strip_fence(response.text)
             try:
@@ -179,6 +194,8 @@ class LLMClient:
                 continue
             response.data = data
             return response
+        if last_exception is not None and last_error == str(last_exception):
+            raise last_exception
         raise LLMError(last_error or "模型调用失败")
 
     # -- 内部实现 ---------------------------------------------------------
@@ -208,7 +225,7 @@ class LLMClient:
         )
         started = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=self.settings.timeout_s) as handle:
+            with urllib.request.urlopen(request, timeout=max(0.1, min(self.settings.timeout_s, self.deadline - time.monotonic()))) as handle:
                 raw = handle.read()
         except urllib.error.HTTPError as exc:
             detail = ""
@@ -216,9 +233,20 @@ class LLMClient:
                 detail = exc.read().decode("utf-8", errors="replace")[:400]
             except Exception:  # pragma: no cover - 读取错误体失败时忽略
                 detail = ""
-            message = f"模型接口返回 HTTP {exc.code}：{redact(detail)}"
+            code = None
+            if exc.code == 402:
+                message = "模型账户余额或额度不足，请在模型服务商处检查账户，或改用可用的 API Key。程序尚未完成本次测评。"
+                code = "MODEL_BALANCE_INSUFFICIENT"
+            elif exc.code in {401, 403}:
+                message = "模型服务拒绝访问，请检查 API Key 是否有效，以及该账户是否有模型访问权限。"
+                code = "MODEL_ACCESS_DENIED"
+            elif exc.code == 429:
+                message = "模型服务请求过于频繁或已达调用限额，请稍后重试。"
+                code = "MODEL_RATE_LIMITED"
+            else:
+                message = f"模型接口返回 HTTP {exc.code}：{redact(detail)}"
             self._log(call_name, system, user, "", started, ok=False, error=message)
-            raise LLMError(message) from exc
+            raise LLMError(message, retryable=exc.code == 429 or exc.code >= 500, code=code) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             message = f"连不上模型接口：{redact(str(exc))}"
             self._log(call_name, system, user, "", started, ok=False, error=message)

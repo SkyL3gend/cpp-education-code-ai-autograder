@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
+import hashlib
 import json
 import re
 import shutil
@@ -35,6 +36,7 @@ from ...config import ASSESSOR_VERSION, data_dir, task_library_dir
 from ...domain.enums import Mode
 from ...domain.errors import AssessorError, InvalidInputError
 from ...domain.models import AssessmentReport, TaskCase
+from ...domain.canonical import hash_json
 from ...llm import LLMSettings
 from ...orchestrator.mode_two import execute_llm_run
 from ...orchestrator.runner import RunOptions, execute_standard_run, make_backend, new_run_id
@@ -71,6 +73,8 @@ TERMINAL_WORKFLOW_STATES = {"COMPLETED", "FAILED", "CANCELLED"}
 
 # 判定理由代码 → 面向教师的中文说明（只做展示翻译，不改变判定）。
 REASON_LABELS = {
+    "VALIDATION_LEVEL_CHECKED": "只完成适配检查和试跑，尚未校准；保留测试证据，不作正式通过/失败判定。",
+    "BUILD_ATTRIBUTION_UNCONFIRMED": "尚未确认错误来自学生原程序，不能据此判失败。",
     "EXECUTION_BACKEND_NOT_ATTESTED": "执行后端未通过隔离能力门禁，本次不计入正式成绩",
     "ASSERTION_MISMATCH": "存在与预期不一致的必需断言",
     "SUBJECT_CRASH_OR_LIMIT": "被测程序在合规调用中崩溃或触达资源上限",
@@ -130,6 +134,72 @@ def _read_report(settings: WebSettings, run_id: str) -> AssessmentReport | None:
     try:
         return AssessmentReport.model_validate(json.loads(path.read_text(encoding="utf-8")))
     except (ValueError, OSError):
+        return None
+
+
+def _read_target_challenges(settings: WebSettings, run_id: str,
+                            report: AssessmentReport) -> dict[str, Any] | None:
+    """Display extra observations only for this historical frozen executable.
+
+    Compare saved provenance, never the current machine's execution backend.
+    This is record binding for display and does not confer scoring authority.
+    """
+    root = _run_dir(settings, run_id)
+    try:
+        paths = [root / "evidence/target_challenges/target_challenges.json",
+                 root / "plans/frozen_plan.json", root / "plans/replay_manifest.json"]
+        if any(not path.is_file() or path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024 for path in paths):
+            return None
+        raw, frozen_raw, replay_raw = [path.read_bytes() for path in paths]
+        candidate, frozen, replay = [json.loads(data.decode("utf-8")) for data in (raw, frozen_raw, replay_raw)]
+        if not all(isinstance(item, dict) for item in (candidate, frozen, replay)):
+            return None
+        bundle = frozen["bundle"]
+        artifact = bundle["build"]["artifact_name"]
+        if (artifact not in {"subject.wasm", "subject.exe"}
+                or any(not isinstance(candidate.get(key), str)
+                       or re.fullmatch(r"[a-f0-9]{64}", candidate[key]) is None
+                       for key in ("environment_digest", "executable_hash"))):
+            return None
+        if not (report.run_id == run_id == candidate.get("run_id")
+                and candidate.get("policy_version") == "t1-target-challenges-v1"
+                and candidate.get("purpose") == "SUPPLEMENTAL_RULE_CHECK"
+                and candidate.get("backend_id") == report.provenance.execution_backend == "wasm_pilot"
+                and candidate.get("task_package_hash") == frozen["task_hash"] == report.provenance.task_package_hash
+                and frozen["submission"]["submission_id"] == report.provenance.submission_id
+                and bundle["task_id"] == report.provenance.task_id == "t1_phone_validation"
+                and bundle["task_version"] == report.provenance.task_version == "1.0.0"
+                and candidate.get("verifier_bundle_hash") == hash_json(bundle)
+                and candidate.get("environment_digest") == replay["environment_digest"]
+                and candidate.get("executable_hash") == replay["file_hashes"]["generated/build/" + artifact]
+                and replay["file_hashes"]["plans/frozen_plan.json"] == hashlib.sha256(frozen_raw).hexdigest()
+                and candidate.get("record_hash") == hash_json({key: value for key, value in candidate.items() if key != "record_hash"})):
+            return None
+        rows, counts = candidate["challenge_results"], candidate["challenge_counts"]
+        allowed_cases = {"challenge_prefix_2", "challenge_empty", "challenge_fullwidth"}
+        if (not isinstance(rows, list) or len(rows) > 3 or not isinstance(counts, dict)
+                or any(not isinstance(row, dict) or row.get("case_id") not in allowed_cases
+                       or row.get("comparison") not in {"MATCH", "MISMATCH", "NOT_COMPARED"}
+                       or not isinstance(row.get("input"), dict) or not isinstance(row.get("expected"), dict)
+                       or "actual" not in row for row in rows)
+                or len({row["case_id"] for row in rows}) != len(rows)
+                or any(type(counts.get(key)) is not int or not 0 <= counts[key] <= 3
+                       for key in ("required", "attempted", "matched", "mismatched", "not_compared"))
+                or type(candidate.get("passed")) is not bool or type(candidate.get("defect_detected")) is not bool):
+            return None
+        # A self-consistent record hash does not guarantee that its summary
+        # agrees with its individual observations.  Never advertise a defect
+        # (or three successful checks) from a malformed or partial summary.
+        matched = sum(row["comparison"] == "MATCH" for row in rows)
+        mismatched = sum(row["comparison"] == "MISMATCH" for row in rows)
+        if (candidate.get("status") not in {"COMPLETED", "UNSUPPORTED", "INVALIDATED", "CANCELLED", "BUDGET_EXCEEDED"}
+                or counts != {"required": 3, "attempted": len(rows), "matched": matched,
+                              "mismatched": mismatched, "not_compared": 3 - matched - mismatched}
+                or candidate["passed"] != (candidate["status"] == "COMPLETED" and matched == 3)
+                or candidate["defect_detected"] != (candidate["status"] == "COMPLETED" and mismatched > 0)):
+            return None
+        return candidate
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
 
 
@@ -324,20 +394,27 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
     app.state.errors: dict[str, str] = {}
     app.state.upload_root = settings.data_root / "web_uploads"
 
+    @app.middleware("http")
+    async def protect_pilot_origin(request: Request, call_next):
+        if settings.backend == "wasm_pilot":
+            if request.url.hostname not in {"127.0.0.1", "localhost", "::1"}:
+                return JSONResponse({"detail": "试验服务仅允许本机地址"}, status_code=403)
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                origin = request.headers.get("origin")
+                same_origin = f"{request.url.scheme}://{request.url.netloc}"
+                if (origin is not None and origin != same_origin) or request.headers.get("sec-fetch-site") == "cross-site":
+                    return JSONResponse({"detail": "拒绝来自其他网页的试验提交"}, status_code=403)
+        return await call_next(request)
+
     def db() -> Database:
         return Database(settings.data_root / "app.sqlite3")
 
     # -- 页面 ---------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse)
-    def modes_page(request: Request) -> HTMLResponse:
-        return _render(
-            request,
-            templates,
-            "modes.html",
-            settings=settings,
-            capabilities=make_backend(settings.backend).capabilities(),
-        )
+    def assessment_home(request: Request) -> HTMLResponse:
+        # Public UI has one entry point; standard routes remain developer tools.
+        return llm_index(request)
 
     @app.get("/standard", response_class=HTMLResponse)
     def standard_index(request: Request) -> HTMLResponse:
@@ -395,6 +472,11 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         submission: UploadFile | None = File(None),
         target_before: UploadFile | None = File(None),
     ) -> Response:
+        if settings.backend == "wasm_pilot":
+            if not settings.allow_unattested:
+                raise HTTPException(status_code=403, detail="WebAssembly 试验未显式启用")
+            if task_ref not in {"t1_phone_validation", "t1_phone_validation@1.0.0"}:
+                raise HTTPException(status_code=400, detail="WebAssembly 试验仅支持手机号校验题")
         key = (api_key or "").strip()
         try:
             llm_settings = LLMSettings.from_env(api_key=key or None)
@@ -431,6 +513,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
 
         run_id = new_run_id()
         options = RunOptions(
+            reserved_run=True,
             task_ref=task_ref,
             submission=submission_path,
             variant=variant or None,
@@ -443,6 +526,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             task_library=settings.library,
             run_id=run_id,
         )
+        (settings.data_root / "runs" / run_id).mkdir(parents=True, exist_ok=True)
         app.state.pending[run_id] = "queued"
 
         def job() -> None:
@@ -548,6 +632,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
 
         run_id = new_run_id()
         options = RunOptions(
+            reserved_run=True,
             task_ref=task_ref,
             submission=submission_path,
             variant=variant or None,
@@ -559,6 +644,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             task_library=settings.library,
             run_id=run_id,
         )
+        (settings.data_root / "runs" / run_id).mkdir(parents=True, exist_ok=True)
         app.state.pending[run_id] = "queued"
 
         def job() -> None:
@@ -599,6 +685,8 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
                 "运行已中断：后台进程已退出（可能是服务重启或运行器异常），"
                 "本次没有生成报告，请重新提交。"
             )
+        if report is None and error is None and row is None and run_dir_exists and not in_flight:
+            error = "排队运行在建立记录前已中断，请重新提交。"
         if report is None:
             return _render(
                 request,
@@ -609,6 +697,23 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
                 error=error,
                 settings=settings,
             )
+        calibration = None
+        calibration_path = _run_dir(settings, run_id) / "plans/target_calibration.json"
+        try:
+            if calibration_path.is_file() and calibration_path.stat().st_size < 4 * 1024 * 1024:
+                candidate = json.loads(calibration_path.read_text(encoding="utf-8"))
+                frozen = json.loads((_run_dir(settings, run_id) / "plans/frozen_plan.json").read_text(encoding="utf-8"))
+                replay = json.loads((_run_dir(settings, run_id) / "plans/replay_manifest.json").read_text(encoding="utf-8"))
+                if (isinstance(candidate, dict) and candidate.get("task_package_hash") == report.provenance.task_package_hash
+                        and candidate.get("record_hash") == hash_json({k: v for k, v in candidate.items() if k != "record_hash"})
+                        and frozen["submission"]["submission_id"] == report.provenance.submission_id
+                        and candidate.get("source_snapshot_hash") == frozen["submission"]["snapshot_hash"]
+                        and candidate.get("verifier_bundle_hash") == hash_json(frozen["bundle"])
+                        and candidate.get("environment_digest") == replay["environment_digest"]
+                        and replay["file_hashes"].get("plans/target_calibration.json") == hashlib.sha256(calibration_path.read_bytes()).hexdigest()):
+                    calibration = candidate
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
         return _render(
             request,
             templates,
@@ -619,6 +724,8 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             badge=_status_badge(report),
             reason_labels=REASON_LABELS,
             settings=settings,
+            verifier_calibration=calibration,
+            target_challenges=_read_target_challenges(settings, run_id, report),
         )
 
     @app.get("/api/runs/{run_id}")
@@ -636,7 +743,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         elif row is not None:
             state = "failed" if _interrupted(row) else "running"
         else:
-            state = "unknown"
+            state = "failed" if _run_dir(settings, run_id).is_dir() else "unknown"
         # 报告文件先于数据库收尾落盘，因此以报告为准补充状态，避免读到“已完成但
         # assessment_status 仍为空”的瞬时中间态。
         execution_status = (
@@ -1022,6 +1129,8 @@ def serve(
     """启动本地 Web 服务（阻塞，直到 Ctrl+C）。"""
     import uvicorn
 
+    if settings.backend == "wasm_pilot" and host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("WebAssembly 试验只能监听本机回环地址")
     app = create_app(settings)
     url = f"http://{host}:{port}/"
     if open_browser:

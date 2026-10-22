@@ -1,9 +1,11 @@
 {% extends "base.html" %}
+{% from '_ui.html' import steps %}
 {% block title %}{{ report.run_id }}{% endblock %}
 {% block content %}
 
-<p class="crumbs"><a href="/standard">{{ t('nav.tasks') }}</a> / <a href="/runs">{{ t('run.crumb') }}</a> / <span class="mono">{{ report.run_id }}</span></p>
+<p class="crumbs"><a href="/">{{ t('nav.tasks') }}</a> / <a href="/runs">{{ t('run.crumb') }}</a> / <span class="mono">{{ report.run_id }}</span></p>
 
+{{ steps(3, t) }}
 <section class="hero run-hero">
   <div>
     <h1>
@@ -18,14 +20,78 @@
   </div>
 </section>
 
+<section class="panel next-action">
+  <div><h2>{{ t('ui.next') }}</h2><p>
+    {% if target_challenges and target_challenges.defect_detected %}
+      补充规则检查发现必测用例之外的差异，请先查看“补充规则检查”中的输入与实际结果。
+    {% elif verifier_calibration and not verifier_calibration.passed and verifier_calibration.status in ['COMPLETED', 'FAILED', 'INVALIDATED'] %}
+      判断程序校准未通过，以下差异待核实，不能据此归责学生。
+    {% elif report.provenance.execution_backend == 'wasm_pilot' and report.counts.completed_cases %}
+      {% if report.counts.mismatched_cases %}发现与预期不同的程序行为，请先查看下方展开的失败用例和实际输出。
+      {% elif report.counts.matched_cases == report.counts.required_cases and report.counts.not_compared_cases == 0 %}必测用例均符合预期。当前为试验测评，结果保留供检查，尚不能作为正式成绩。
+      {% else %}本次仅取得部分测试结果，请检查未完成或未能比较的用例。{% endif %}
+    {% else %}{{ t('ui.result.mock') if report.provenance.execution_backend == 'mock' else t('ui.next.' ~ report.assessment_status.value) }}{% endif %}
+  </p></div>
+  <a class="button" href="/llm/tasks/{{ report.provenance.task_id }}@{{ report.provenance.task_version }}">{{ t('ui.retry') }} →</a>
+</section>
 {% if report.provenance.execution_backend == 'mock' %}
 <div class="banner warn">
   <strong>{{ t('run.banner.mock') }}</strong>
+</div>
+{% elif report.provenance.execution_backend == 'wasm_pilot' %}
+<div class="banner warn">
+  <strong>WebAssembly 试测结果：{{ report.counts.matched_cases }} 项符合预期，{{ report.counts.mismatched_cases }} 项不符合预期，{{ report.counts.not_compared_cases }} 项未比较。</strong>
+  <p>{% if report.counts.completed_cases %}以下包含程序真实运行的观测结果。“结论不确定”表示本试验尚不具备正式评分资格。请查看逐项结果和输入输出差异。{% else %}本次尚未获得完整用例结果，请查看错误说明；不能据此判断程序正确或错误。{% endif %}</p>
 </div>
 {% elif not report.grade_eligible %}
 <div class="banner warn">
   <strong>{{ t('run.banner.ineligible', reasons=(report.grade_eligible_reasons|map('reason_label')|join('；') if report.grade_eligible_reasons else t('run.banner.ineligible_default'))) }}</strong>
 </div>
+{% endif %}
+
+{% if verifier_calibration %}
+<section class="panel">
+  <h2>判断程序可靠性检查</h2>
+  {% if verifier_calibration.passed %}
+  <p><strong>固定工程回归校准通过</strong>：同一套判断程序在独立的正确版和已知缺陷版上均得到预期结果，并通过错误首位、空号码、全角数字的补充挑战。</p>
+  <p class="muted small">已核对原有联系人及编号保持完整。本检查只适用于本题固定工程形态，不等同人工签审或正式评分资格。</p>
+  {% else %}
+  <p><strong>回归校准尚未通过或不适用</strong>：{{ verifier_calibration.get('reason', verifier_calibration.status) }}</p>
+  <p class="muted small">这属于判断程序可靠性限制，不能据此认定学生程序错误。</p>
+  {% endif %}
+  <details class="details"><summary>校准范围与绑定信息</summary>
+    <p class="small">{{ verifier_calibration.scope }}；回归校准阶段未请求模型。</p>
+    <p class="mono tiny">{{ verifier_calibration.record_hash }}</p>
+  </details>
+</section>
+{% endif %}
+
+{% if target_challenges %}
+<section class="panel" id="supplemental-checks">
+  <h2>补充规则检查</h2>
+  <p class="small muted">另外检查 3 种输入，结果单独展示，不改变下方 {{ report.counts.required_cases }} 项必测用例计数，也不作为正式成绩。</p>
+  {% if target_challenges.defect_detected %}
+  <p><strong>发现 {{ target_challenges.challenge_counts.mismatched }} 项必测用例之外的差异。</strong>请根据预期与实际状态核查。</p>
+  {% elif target_challenges.passed %}
+  <p><strong>3 项补充规则均符合预期。</strong></p>
+  {% else %}
+  <p><strong>补充检查尚未获得完整可比较的结果。</strong>{{ target_challenges.get('reason', '') }} 无法比较不能据此认定程序有业务缺陷。</p>
+  {% endif %}
+  {% for challenge in target_challenges.challenge_results %}
+  <details class="details" {% if challenge.comparison == 'MISMATCH' %}open{% endif %}>
+    <summary>{{ challenge.label }} <span class="badge {{ challenge.comparison|lower }}">{{ label('comparison', challenge.comparison) }}</span></summary>
+    <p>输入手机号：<code class="json">{{ challenge.input.get('candidate', {}).get('phone') or '（空号码）' }}</code></p>
+    <p><strong>预期：</strong>{% if challenge.expected.get('created') is sameas false %}拒绝新增联系人{% elif challenge.expected.get('created') is sameas true %}允许新增联系人{% else %}查看完整状态{% endif %}；
+      <strong>实际：</strong>{% if challenge.actual is mapping and challenge.actual.get('created') is sameas true %}程序新增了联系人{% elif challenge.actual is mapping and challenge.actual.get('created') is sameas false %}程序拒绝新增联系人{% else %}未取得有效结果{% endif %}。</p>
+    <details class="details"><summary>查看完整输入与状态</summary>
+      <p class="small">输入</p><pre class="stdout">{{ challenge.input|tojson(indent=2) }}</pre>
+      <p class="small">预期状态</p><pre class="stdout">{{ challenge.expected|tojson(indent=2) }}</pre>
+      <p class="small">实际状态</p><pre class="stdout">{{ challenge.actual|tojson(indent=2) }}</pre>
+    </details>
+    <p class="small muted">{{ label('termination', challenge.termination) }} · {{ challenge.protocol_status }}{% if challenge.detail %} · {{ challenge.detail }}{% endif %}</p>
+  </details>
+  {% endfor %}
+</section>
 {% endif %}
 
 {% if error %}
@@ -34,44 +100,26 @@
 </div>
 {% endif %}
 
-<section class="panel">
-  <table class="kv wide">
-    <tr><th>{{ t('run.execution') }}</th><td><span class="badge {{ report.execution_status.value|lower }}">{{ label('execution', report.execution_status.value) }}</span></td>
-        <th>{{ t('run.workflow') }}</th><td>{{ row.workflow_state if row else '—' }}</td></tr>
-    <tr><th>{{ t('run.validation') }}</th><td>{{ label('validation', report.validation_level.value) }}</td>
-        <th>{{ t('run.mode') }}</th><td>{{ label('mode', report.mode.value) }}</td></tr>
-    <tr><th>{{ t('run.backend') }}</th><td class="mono small">{{ report.provenance.execution_backend }}
-        {% if report.provenance.sandbox_attested %}<span class="badge pass">{{ t('run.attested') }}</span>{% else %}<span class="badge draft">{{ t('run.unattested') }}</span>{% endif %}</td>
-        <th>{{ t('run.eligible') }}</th><td>{{ t('yes') if report.grade_eligible else t('no') }}</td></tr>
-    <tr><th>{{ t('run.submission') }}</th><td class="mono tiny">{{ report.provenance.submission_id or '—' }}</td>
-        <th>{{ t('run.toolchain') }}</th><td class="mono small">{{ report.provenance.toolchain_id }}</td></tr>
-    <tr><th>{{ t('run.started') }}</th><td class="mono small">{{ report.provenance.started_at }}</td>
-        <th>{{ t('run.finished') }}</th><td class="mono small">{{ report.provenance.finished_at }}</td></tr>
-  </table>
-  {% if report.observations_note %}
-  <p class="muted small">{{ report.observations_note }}</p>
-  {% endif %}
-</section>
+
 
 <section class="panel">
   <div class="panel-head"><h2>{{ t('run.counts') }}</h2></div>
   <div class="stats">
     <div class="stat"><span class="stat-label">{{ t('run.count.required') }}</span><span class="stat-value">{{ report.counts.required_cases }}</span></div>
-    <div class="stat"><span class="stat-label">{{ t('run.count.attempted') }}</span><span class="stat-value">{{ report.counts.attempted_cases }}</span></div>
-    <div class="stat"><span class="stat-label">{{ t('run.count.completed') }}</span><span class="stat-value">{{ report.counts.completed_cases }}</span></div>
     <div class="stat pass"><span class="stat-label">{{ t('run.count.matched') }}</span><span class="stat-value">{{ report.counts.matched_cases }}</span></div>
     <div class="stat fail"><span class="stat-label">{{ t('run.count.mismatched') }}</span><span class="stat-value">{{ report.counts.mismatched_cases }}</span></div>
     <div class="stat"><span class="stat-label">{{ t('run.count.not_compared') }}</span><span class="stat-value">{{ report.counts.not_compared_cases }}</span></div>
   </div>
-  <p class="muted small">
+  <details class="details"><summary>{{ t('run.case.assertions', count=report.counts.required_assertions) }}</summary><p class="muted small">
     {{ t('run.assertions', required=report.counts.required_assertions, matched=report.counts.matched_assertions, mismatched=report.counts.mismatched_assertions, not_compared=report.counts.not_compared_assertions) }}
   </p>
+  </details>
   {% if report.grade_eligible_reasons %}
   <div class="reasons">
     <h3>{{ t('run.reasons') }}</h3>
     <ul>
       {% for reason in report.grade_eligible_reasons %}
-      <li><span class="mono tiny">{{ reason }}</span> {{ reason_labels.get(reason, '') }}</li>
+      <li>{{ reason|reason_label }}</li>
       {% endfor %}
     </ul>
   </div>
@@ -82,16 +130,14 @@
   <div class="panel-head"><h2>{{ t('run.cases') }}</h2></div>
   <table class="table">
     <thead>
-      <tr><th>{{ t('run.case.case') }}</th><th>{{ t('run.case.purpose') }}</th><th>{{ t('run.case.comparison') }}</th><th>{{ t('run.case.termination') }}</th><th>{{ t('run.case.protocol') }}</th><th>{{ t('run.case.failed') }}</th><th>{{ t('run.case.note') }}</th></tr>
+      <tr><th>{{ t('run.case.case') }}</th><th>{{ t('run.case.comparison') }}</th><th>{{ t('run.case.termination') }}</th><th>{{ t('run.case.failed') }}</th><th>{{ t('run.case.note') }}</th></tr>
     </thead>
     <tbody>
       {% for case in report.case_results %}
       <tr>
         <td class="mono small">{{ case.case_id }}</td>
-        <td>{{ label('purpose', case.purpose.value) }}</td>
         <td><span class="badge {{ case.comparison.value|lower }}">{{ label('comparison', case.comparison.value) }}</span></td>
         <td class="small">{{ label('termination', case.termination.value) }}</td>
-        <td class="small">{{ label('protocol', case.protocol_status.value) }}</td>
         <td class="mono tiny">{{ case.failed_assertions|join(', ') if case.failed_assertions else '—' }}</td>
         <td class="small muted">{{ case.note or '' }}</td>
       </tr>
@@ -101,7 +147,7 @@
 </section>
 
 {% for case in report.case_results %}
-<details class="panel details">
+<details class="panel details" {% if case.comparison.value == 'MISMATCH' %}open{% endif %}>
   <summary>
     <span class="mono">{{ case.case_id }}</span>
     <span class="badge {{ case.comparison.value|lower }}">{{ label('comparison', case.comparison.value) }}</span>
@@ -125,8 +171,7 @@
 </details>
 {% endfor %}
 
-<section class="panel">
-  <div class="panel-head"><h2>{{ t('run.coverage') }}</h2></div>
+<details class="panel details technical"><summary>{{ t('ui.result.coverage') }}</summary>
   <table class="kv">
     <tr><th>{{ t('run.coverage.complete') }}</th><td>{{ t('yes') if report.coverage.complete else t('no') }}</td></tr>
     <tr><th>{{ t('run.coverage.missing_partitions') }}</th><td class="mono small">{{ report.coverage.missing_partitions|join(', ') if report.coverage.missing_partitions else '—' }}</td></tr>
@@ -134,12 +179,30 @@
     <tr><th>{{ t('run.coverage.evidence') }}</th><td class="mono tiny">{{ report.evidence_refs|join(', ') if report.evidence_refs else '—' }}</td></tr>
     <tr><th>{{ t('run.coverage.dir') }}</th><td class="mono tiny">data/runs/{{ report.run_id }}/</td></tr>
   </table>
-</section>
+</details>
 
 <section class="panel muted-panel">
   <div class="panel-head"><h2>{{ t('run.ai.title') }}</h2></div>
   <p>{{ t('run.ai.text') }}</p>
-  <p class="muted small">{{ t('run.ai.text2') }}</p>
+
 </section>
 
+<details class="panel details technical"><summary>{{ t('ui.result.details') }}</summary>
+  <table class="kv wide">
+    <tr><th>{{ t('run.execution') }}</th><td><span class="badge {{ report.execution_status.value|lower }}">{{ label('execution', report.execution_status.value) }}</span></td>
+        <th>{{ t('run.workflow') }}</th><td>{{ row.workflow_state if row else '—' }}</td></tr>
+    <tr><th>{{ t('run.validation') }}</th><td>{{ label('validation', report.validation_level.value) }}</td>
+        <th>{{ t('run.mode') }}</th><td>{{ label('mode', report.mode.value) }}</td></tr>
+    <tr><th>{{ t('run.backend') }}</th><td class="mono small">{{ report.provenance.execution_backend }}
+        {% if report.provenance.sandbox_attested %}<span class="badge pass">{{ t('run.attested') }}</span>{% else %}<span class="badge draft">{{ t('run.unattested') }}</span>{% endif %}</td>
+        <th>{{ t('run.eligible') }}</th><td>{{ t('yes') if report.grade_eligible else t('no') }}</td></tr>
+    <tr><th>{{ t('run.submission') }}</th><td class="mono tiny">{{ report.provenance.submission_id or '—' }}</td>
+        <th>{{ t('run.toolchain') }}</th><td class="mono small">{{ report.provenance.toolchain_id }}</td></tr>
+    <tr><th>{{ t('run.started') }}</th><td class="mono small">{{ report.provenance.started_at }}</td>
+        <th>{{ t('run.finished') }}</th><td class="mono small">{{ report.provenance.finished_at }}</td></tr>
+  </table>
+  {% if report.observations_note %}
+  <p class="muted small">{{ report.observations_note }}</p>
+  {% endif %}
+</details>
 {% endblock %}

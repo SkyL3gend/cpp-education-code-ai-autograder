@@ -59,8 +59,13 @@ def test_no_isolation_backend_is_never_attested():
 
 
 def test_all_capabilities_present_is_attested():
-    full = capabilities(network_block=True, filesystem_isolation=True)
+    full = capabilities(network_block=True, filesystem_isolation=True, isolation=IsolationLevel.VM)
     decision = evaluate(full, ALL_REQUIREMENTS, allow_unattested=False)
     assert decision.allowed is True
     assert decision.attested is True
     assert decision.missing == []
+
+def test_process_reset_and_filesystem_are_mandatory():
+    result = evaluate(capabilities(network_block=True, process_limit=False, clean_reset=False), ALL_REQUIREMENTS, allow_unattested=False)
+    assert not result.attested
+    assert {"process_limit", "clean_reset", "filesystem_isolation", "isolation"} <= set(result.missing)

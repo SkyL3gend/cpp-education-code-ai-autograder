@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_ui.html' import environment %}
 {% block title %}{{ t('batch.title') }}{% endblock %}
 {% block content %}
 
@@ -7,16 +8,18 @@
   <p>{{ t('batch.intro') }}</p>
 </section>
 
+{{ environment(settings, t) }}
 <section class="panel">
-  <form method="post" action="/batch" enctype="multipart/form-data" class="form">
+  <form method="post" action="/batch" enctype="multipart/form-data" class="form" data-submit-form data-busy-label="{{ t('ui.busy') }}">
+    <fieldset class="form-fields" {% if settings.backend in ['local', 'local_win32_job'] %}disabled{% endif %}><legend class="sr-only">{{ t('batch.title') }}</legend>
     <div class="field">
       <span>{{ t('batch.tasks') }}</span>
       <div class="check-grid">
         {% for task in tasks %}
         <label class="check">
           <input type="checkbox" name="tasks" value="{{ task.task_id }}@{{ task.version }}" checked>
-          <span class="mono small">{{ task.task_id }}@{{ task.version }}</span>
-          <span class="muted small">{{ task.title }}</span>
+
+          <span>{{ task.title }}</span>
         </label>
         {% endfor %}
       </div>
@@ -27,8 +30,9 @@
     </label>
     <p class="muted small">{{ t('batch.limit') }}</p>
     <div>
-      <button class="button primary" type="submit">{{ t('batch.submit') }}</button>
+      <button class="button primary" type="submit">{{ t('ui.upload_unavailable') if settings.backend in ['local', 'local_win32_job'] else t('ui.mock_submit') if settings.backend == 'mock' else t('batch.submit') }}</button>
     </div>
+    </fieldset>
   </form>
 </section>
 

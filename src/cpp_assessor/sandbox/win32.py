@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import stat
 import subprocess
 import time
 from ctypes import wintypes
@@ -163,6 +164,7 @@ class JobAccounting:
     total_processes: int
     peak_job_memory: int
     peak_process_memory: int
+    stop_reason: str | None = None
 
     @property
     def total_user_ms(self) -> int:
@@ -224,25 +226,28 @@ class JobObject:
             _raise_last_error("AssignProcessToJobObject")
 
     def terminate(self, exit_code: int = 1) -> None:
-        kernel32.TerminateJobObject(self.handle, exit_code)
+        if not kernel32.TerminateJobObject(self.handle, exit_code):
+            _raise_last_error("TerminateJobObject")
 
     def accounting(self) -> JobAccounting:
         info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION()
-        kernel32.QueryInformationJobObject(
+        if not kernel32.QueryInformationJobObject(
             self.handle,
             JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
             ctypes.byref(info),
             ctypes.sizeof(info),
             None,
-        )
+        ):
+            _raise_last_error("QueryInformationJobObject(accounting)")
         extended = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-        kernel32.QueryInformationJobObject(
+        if not kernel32.QueryInformationJobObject(
             self.handle,
             JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
             ctypes.byref(extended),
             ctypes.sizeof(extended),
             None,
-        )
+        ):
+            _raise_last_error("QueryInformationJobObject(extended)")
         return JobAccounting(
             total_user_time_100ns=info.TotalUserTime,
             total_kernel_time_100ns=info.TotalKernelTime,
@@ -305,14 +310,25 @@ def spawn_in_job(
     stdout_path: Path,
     stderr_path: Path,
     wall_timeout_ms: int,
+    output_limit: int | None = None,
+    workdir_limit: int | None = None,
+    monitored_root: Path | None = None,
+    cancelled=None,
+    process_factory=None,
+    cpu_limit_ms: int | None = None,
 ) -> tuple[int | None, bool, int, JobAccounting, float]:
-    """启动进程、加入 Job、等待；返回 (exit_code, timed_out, wall_ms, accounting, start)。"""
+    """启动进程、加入 Job、等待；返回 (exit_code, timed_out, wall_ms, accounting, start)。
+
+    monitored_root defaults to cwd. A sandbox with a nested working directory
+    must pass its complete writable root so sibling outputs count as well.
+    """
+    monitored_root = Path(monitored_root) if monitored_root is not None else cwd
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stderr_path.parent.mkdir(parents=True, exist_ok=True)
     stdin_handle = open(stdin_path, "rb") if stdin_path is not None else subprocess.DEVNULL
     started = time.perf_counter()
     with open(stdout_path, "wb") as stdout_handle, open(stderr_path, "wb") as stderr_handle:
-        process = subprocess.Popen(
+        process = (process_factory or subprocess.Popen)(
             argv,
             cwd=str(cwd),
             env=env,
@@ -326,7 +342,23 @@ def spawn_in_job(
             job.assign(int(process._handle))  # type: ignore[attr-defined]
             resume_process_threads(process.pid)
             timed_out = False
+            stop_reason = None
             while True:
+                if cancelled is not None and cancelled():
+                    stop_reason = "CANCELLED"
+                if cpu_limit_ms is not None and job.accounting().total_user_ms >= cpu_limit_ms:
+                    stop_reason = "CPU_TIME_LIMIT"
+                # Inspect the handles opened by the host. A guest can replace a
+                # pathname while retaining the inherited original file handle.
+                written = sum(os.fstat(stream.fileno()).st_size for stream in (stdout_handle, stderr_handle))
+                if output_limit is not None and written > output_limit:
+                    stop_reason = "OUTPUT_LIMIT"
+                if workdir_limit is not None:
+                    if _workdir_exceeds_limit(monitored_root, workdir_limit):
+                        stop_reason = "DISK_LIMIT"
+                if stop_reason:
+                    job.terminate(5)
+                    break
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
                 remaining = wall_timeout_ms - elapsed_ms
                 if remaining <= 0:
@@ -334,17 +366,33 @@ def spawn_in_job(
                     job.terminate(2)
                     break
                 result = kernel32.WaitForSingleObject(
-                    int(process._handle), min(remaining, 200)  # type: ignore[attr-defined]
+                    int(process._handle), min(remaining, 50)  # type: ignore[attr-defined]
                 )
                 if result == WAIT_OBJECT_0:
                     break
             wall_ms = int((time.perf_counter() - started) * 1000)
             accounting = job.accounting()
-            if not timed_out and accounting.active_processes > 0:
+            accounting.stop_reason = stop_reason
+            if accounting.active_processes > 0:
                 # 主进程退出后仍有残留子进程：连树终止（tree_kill）
                 job.terminate(3)
+            # TerminateJobObject is asynchronous. The host must not read or
+            # copy guest-writable paths while a remaining child can change them.
+            exit_deadline = time.perf_counter() + 5
+            while True:
                 accounting = job.accounting()
-            process.wait(timeout=10)
+                if accounting.active_processes == 0:
+                    break
+                if time.perf_counter() >= exit_deadline:
+                    raise OSError("Sandbox job processes did not exit after termination")
+                time.sleep(0.01)
+            # Once the Job reports no live processes, its main process must
+            # also be signalled. Keep the handle wait within the same deadline.
+            try:
+                process.wait(timeout=max(0, exit_deadline - time.perf_counter()))
+            except subprocess.TimeoutExpired as exc:
+                raise OSError("Sandbox job main process exit could not be confirmed") from exc
+            accounting.stop_reason = stop_reason
             return process.returncode, timed_out, wall_ms, accounting, started
         finally:
             if process.poll() is None:
@@ -355,6 +403,36 @@ def spawn_in_job(
                     process.kill()
             if stdin_handle is not subprocess.DEVNULL:
                 stdin_handle.close()  # type: ignore[union-attr]
+
+
+def _workdir_exceeds_limit(root: Path, limit: int) -> bool:
+    """Count local entries without following Windows reparse targets."""
+    def is_reparse(info) -> bool:
+        return bool(getattr(info, "st_file_attributes", 0) & 0x400) or stat.S_ISLNK(info.st_mode)
+
+    if is_reparse(root.lstat()):
+        raise OSError("Sandbox writable root became a reparse point")
+    size = 0
+    for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+        # followlinks=False alone does not prevent traversal of all Windows
+        # junctions. Prune every reparse directory before os.walk descends.
+        retained = []
+        for name in directories:
+            try:
+                info = (Path(current) / name).lstat()
+            except FileNotFoundError:
+                continue
+            if not is_reparse(info):
+                retained.append(name)
+        directories[:] = retained
+        for name in files:
+            try:
+                size += (Path(current) / name).lstat().st_size
+            except FileNotFoundError:
+                continue
+            if size > limit:
+                return True
+    return False
 
 
 def minimal_environment(work_dir: Path) -> dict[str, str]:

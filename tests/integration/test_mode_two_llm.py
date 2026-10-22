@@ -1,198 +1,85 @@
-"""模式二（LLM 适配）端到端：假模型 + 真实编译/运行，不访问网络。"""
-
+"""Actual compiler + deterministic model: method migration and new-layout observer."""
 from __future__ import annotations
-
+import json
 import shutil
-from pathlib import Path
 from types import SimpleNamespace
-
 import pytest
 
-from cpp_assessor.domain.enums import ExecutionStatus, Mode, OverallStatus
-from cpp_assessor.llm import LLMSettings
+from cpp_assessor.domain.enums import Mode, OverallStatus, ExecutionStatus
+from cpp_assessor.domain.errors import InvalidInputError
+from cpp_assessor.llm.provider import LLMSettings
 from cpp_assessor.orchestrator import mode_two
-from cpp_assessor.orchestrator.mode_two import execute_llm_run
-from cpp_assessor.orchestrator.runner import RunOptions, new_run_id
+from cpp_assessor.orchestrator.runner import RunOptions
+from tests.target_verifier_fixture import create_target, bundle
 
-ROOT = Path(__file__).resolve().parents[2]
-REFERENCE = ROOT / "参考基准程序" / "通讯录_v6最终版.cpp"
-
-pytestmark = pytest.mark.skipif(
-    shutil.which("g++") is None or not REFERENCE.is_file(),
-    reason="需要 g++ 与参考基准程序",
-)
-
-SESSION = [
-    "20",
-    "2",
-    "1",
-    "1",
-    "{{candidate.name}}",
-    "{{candidate.phone}}",
-    "{{candidate.birthday.year}} {{candidate.birthday.month}} {{candidate.birthday.day}}",
-    "北京",
-    "朝阳路1号",
-    "0",
-    "1",
-    "0",
-    "0",
-    "2",
-    "1",
-    "2",
-    "{{candidate.name}}",
-    "{{candidate.phone}}",
-    "{{candidate.birthday.year}} {{candidate.birthday.month}} {{candidate.birthday.day}}",
-    "北京",
-    "朝阳路1号",
-    "0",
-    "0",
-    "1",
-    "9",
-    "1",
-    "{{candidate.name}}",
-    "0",
-    "0",
-]
+pytestmark = pytest.mark.skipif(shutil.which("g++") is None, reason="requires known local compiler")
 
 
-def bundle(task_id: str) -> dict:
-    return {
-        "schema_version": "1.0",
-        "task_id": task_id,
-        "task_version": "1.0.0",
-        "status": "READY",
-        "target": {
-            "subject_level": "PROGRAM",
-            "encoding": "utf-8",
-            "sources": [REFERENCE.name],
-            "entry_files": [REFERENCE.name],
-            "excluded_files": [],
-            "include_dirs": [],
-            "notes": "单文件",
-        },
-        "build": {
-            "compiler_flags": ["-std=c++17", "-O2"],
-            "defines": [],
-            "libraries": [],
-            "artifact_name": "subject.exe",
-        },
-        "driver": {
-            "kind": "stdin_script",
-            "session": SESSION,
-            "eof": True,
-            "notes": "添加成功后回到主菜单再搜索",
-        },
-        "observer": {
-            "kind": "extractor",
-            "extractor_id": "contactbook_menu_v1",
-            "params": {
-                "name": "{{candidate.name}}",
-                "phone": "{{candidate.phone}}",
-                "baseline_names": ["测试联系人1", "测试联系人2", "测试联系人3"],
-            },
-            "produces": ["created", "contacts_after"],
-        },
-        "assertion_bindings": [
-            {"assertion_id": "a_created", "actual_key": "created", "status": "bound", "gap_reason": ""},
-            {
-                "assertion_id": "a_contacts",
-                "actual_key": "contacts_after",
-                "status": "bound",
-                "gap_reason": "",
-            },
-        ],
-        "migration_matrix": [
-            {
-                "partition_id": partition,
-                "rule_ids": ["R1", "R2", "R3", "R4"],
-                "driver_step": 2,
-                "observation": "添加后搜索列表",
-                "assertion_ids": ["a_created", "a_contacts"],
-                "status": "covered",
-            }
-            for partition in ("p_valid_11_ascii", "p_short_10", "p_long_12", "p_non_digit_11")
-        ],
-        "coverage_gaps": [],
-        "notes": "假模型回复，只用于验证编排链路",
-    }
-
-
-class FakeClient:
-    def __init__(self, settings, log_dir=None):
-        self.settings = settings
-        self.calls: list[str] = []
-
-    def complete_json(self, *, system: str, user: str, call_name: str, max_tokens: int):
-        self.calls.append(call_name)
-        return SimpleNamespace(data=bundle("t1_phone_validation"))
-
-
-def test_mode_two_runs_reference_program_and_reports_mismatch(monkeypatch, tmp_path) -> None:
+def configure(monkeypatch, target, *, function=False, broken=False):
+    calls = []
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def complete_json(self, *, system, user, call_name, **kwargs):
+            payload = json.JSONDecoder().raw_decode(user)[0]
+            calls.append((call_name, payload))
+            if call_name == "review_verifier":
+                return SimpleNamespace(data={"issues": [], "method_hash": payload["reference"]["method_hash"]})
+            result = bundle(target, function=function)
+            if broken:
+                result["driver"]["driver_source"] = result["driver"].get("driver_source", "") + "\nTHIS IS NOT CXX;"
+            return SimpleNamespace(data=result)
     monkeypatch.setattr(mode_two, "LLMClient", FakeClient)
-    options = RunOptions(
-        task_ref="t1_phone_validation@1.0.0",
-        submission=REFERENCE,
-        mode=Mode.LLM,
-        backend="local",
-        data_dir=tmp_path,
-        run_id=new_run_id(),
-    )
-    options.allow_unattested = True
-    result = execute_llm_run(options, LLMSettings(api_key="sk-test", model="fake"))
-
-    report = result.report
-    assert report.mode == Mode.LLM
-    assert result.workflow_state.value == "COMPLETED"
-    assert report.execution_status == ExecutionStatus.COMPLETED
-    assert report.assessment_status in {OverallStatus.FAIL, OverallStatus.INCONCLUSIVE}
-    assert len(report.case_results) == 4
-    assert report.case_results[0].case_id.startswith("c_")
-    assert report.grade_eligible is False
-    assert "模式二" in (report.observations_note or "")
-    assert (tmp_path / "runs" / options.run_id / "objective_report.json").is_file()
+    return calls
 
 
-def test_mode_two_requires_api_key(tmp_path) -> None:
-    from cpp_assessor.domain.errors import InvalidInputError
+@pytest.mark.parametrize("function", [False, True])
+def test_full_method_migration_runs_and_preserves_checked_qualification(monkeypatch, tmp_path, function):
+    target = create_target(tmp_path / "target")
+    calls = configure(monkeypatch, target, function=function)
+    options = RunOptions(task_ref="t1_phone_validation@1.0.0", submission=target, mode=Mode.LLM, backend="local", data_dir=tmp_path / "data", allow_unattested=True, trusted_fixture=True)
+    result = mode_two.execute_llm_run(options, LLMSettings(api_key="test-no-network"))
+    assert result.execution_status is ExecutionStatus.COMPLETED, result.error
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
+    assert not result.grade_eligible
+    assert len(result.report.case_results) == 4
+    assert all(c.comparison.value == "MATCH" for c in result.report.case_results)
+    assert calls[0][1]["reference"]["test_method"]["setup_steps"]
+    assert any("opCreateContact" in f["text"] for f in calls[0][1]["reference"]["reference_verifier_files"])
+    assert any(name == "review_verifier" for name, _ in calls)
+    assert (result.run_dir / "plans/frozen_plan.json").is_file()
+    assert (result.run_dir / "evidence/cases/c_valid_11_ascii/observation.json").is_file()
+    from cpp_assessor.storage.db import Database
+    assert Database(tmp_path / "data/app.sqlite3").get_run(result.run_id) is not None
+    inventory = json.loads((result.run_dir / "plans/subject_inventory.json").read_text(encoding="utf-8"))
+    assert "demo.cpp" not in inventory["compile_units"]
+    if not function:
+        assert (result.run_dir / "generated/driver/observer.exe").is_file()
 
-    options = RunOptions(
-        task_ref="t1_phone_validation@1.0.0",
-        submission=REFERENCE,
-        backend="local",
-        data_dir=tmp_path,
-    )
+
+def test_generated_driver_compile_errors_never_blame_student(monkeypatch, tmp_path):
+    target = create_target(tmp_path / "target")
+    configure(monkeypatch, target, function=True, broken=True)
+    result = mode_two.execute_llm_run(RunOptions(task_ref="t1_phone_validation@1.0.0", submission=target, mode=Mode.LLM, backend="local", data_dir=tmp_path / "data", allow_unattested=True, trusted_fixture=True), LLMSettings(api_key="test-no-network"))
+    assert result.execution_status is ExecutionStatus.ADAPTATION_FAILED
+    assert result.assessment_status is OverallStatus.INCONCLUSIVE
+    assert not result.grade_eligible
+    assert list((result.run_dir / "evidence/revisions").rglob("*.json"))
+    import json
+    evidence = json.loads((result.run_dir / "evidence/compile/compile.json").read_text(encoding="utf-8"))
+    assert evidence["fault_owner"] == "ADAPTER"
+    assert evidence["backend_fault_owner"] == "SUBMISSION"  # raw compiler label is not final blame
+
+
+def test_untrusted_upload_cannot_use_local_allow_flag(monkeypatch, tmp_path):
+    target = create_target(tmp_path / "target")
+    calls = configure(monkeypatch, target)
+    result = mode_two.execute_llm_run(RunOptions(task_ref="t1_phone_validation@1.0.0", submission=target, mode=Mode.LLM, data_dir=tmp_path / "data", allow_unattested=True), LLMSettings(api_key="test-no-network"))
+    assert result.execution_status is ExecutionStatus.UNSUPPORTED
+    assert result.assessment_status is OverallStatus.NOT_ASSESSED
+    assert not calls  # refuse before spending API budget or compiling
+
+
+def test_mode_two_requires_key(tmp_path):
     with pytest.raises(InvalidInputError):
-        execute_llm_run(options, LLMSettings(api_key=""))
-
-
-def test_mode_two_marks_unusable_program_as_not_compared(monkeypatch, tmp_path) -> None:
-    class GarbageClient:
-        def __init__(self, settings, log_dir=None):
-            self.settings = settings
-
-        def complete_json(self, *, system: str, user: str, call_name: str, max_tokens: int):
-            payload = bundle("t1_phone_validation")
-            payload["driver"]["session"] = ["0"]
-            return SimpleNamespace(data=payload)
-
-    monkeypatch.setattr(mode_two, "LLMClient", GarbageClient)
-    submission = tmp_path / "empty.cpp"
-    submission.write_text("int main() { return 0; }\n", encoding="utf-8")
-    options = RunOptions(
-        task_ref="t1_phone_validation@1.0.0",
-        submission=submission,
-        mode=Mode.LLM,
-        backend="local",
-        data_dir=tmp_path / "runs",
-    )
-    options.allow_unattested = True
-    result = execute_llm_run(options, LLMSettings(api_key="sk-test", model="fake"))
-    assert result.report.execution_status in {
-        ExecutionStatus.ADAPTATION_FAILED,
-        ExecutionStatus.COMPLETED,
-    }
-    assert result.report.assessment_status in {
-        OverallStatus.INCONCLUSIVE,
-        OverallStatus.NOT_ASSESSED,
-    }
-    assert result.report.grade_eligible is False
+        mode_two.execute_llm_run(RunOptions(task_ref="t1_phone_validation@1.0.0", submission=tmp_path, mode=Mode.LLM), LLMSettings(api_key=""))

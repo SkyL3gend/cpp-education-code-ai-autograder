@@ -1,0 +1,100 @@
+{
+  "R1_unobserved_phone_birthday_id_filled_from_input": {
+    "actual": {
+      "created": true,
+      "saved_phone": null,
+      "contacts_after": [
+        {
+          "id": 1,
+          "name": "张三",
+          "phone": "13800138000",
+          "birthday": "2000-01-01"
+        }
+      ],
+      "rejected": false,
+      "observed_rows": 1
+    },
+    "comparisons": {
+      "a_created": "MATCH",
+      "a_contacts": "MATCH"
+    },
+    "bug_reproduced": true
+  },
+  "R2_unobserved_initial_state_accepted_as_actual": {
+    "actual": {
+      "created": false,
+      "saved_phone": null,
+      "contacts_after": [
+        {
+          "id": 7,
+          "name": "已有联系人",
+          "phone": "13900139000",
+          "birthday": "1995-05-05"
+        }
+      ],
+      "rejected": true,
+      "observed_rows": 1
+    },
+    "comparisons": {
+      "a_created": "MATCH",
+      "a_contacts": "MATCH"
+    },
+    "bug_reproduced": true
+  },
+  "R3_search_output_phone_overwritten": {
+    "actual": {
+      "matches": [
+        {
+          "id": 1,
+          "name": "Anna",
+          "phone": "13800138000",
+          "birthday": "2000-01-01"
+        }
+      ],
+      "search_hits": [
+        "Anna"
+      ],
+      "contacts_after": [
+        {
+          "id": 1,
+          "name": "Anna",
+          "phone": "13800138000",
+          "birthday": "2000-01-01"
+        }
+      ],
+      "observed_rows": 1
+    },
+    "bug_reproduced": true
+  },
+  "R4_checked_adapter_becomes_grade_eligible": {
+    "assessment_status": "PASS",
+    "grade_eligible": true,
+    "bug_reproduced": true
+  },
+  "R5_unpublished_unverified_crash_becomes_grade_eligible": {
+    "assessment_status": "FAIL",
+    "grade_eligible": true,
+    "bug_reproduced": true
+  },
+  "R6_explicit_migration_gaps_pass_static_validation": {
+    "passed": true,
+    "problems": [],
+    "bug_reproduced": true
+  },
+  "R7_unrestricted_output_path_and_compiler_flags": {
+    "passed": true,
+    "problems": [],
+    "bug_reproduced": true
+  },
+  "R9_generated_driver_never_calls_student_implementation": {
+    "passed": true,
+    "problems": [],
+    "bug_reproduced": true
+  },
+  "R8_missing_process_reset_filesystem_limits_still_attested": {
+    "allowed": true,
+    "attested": true,
+    "missing": [],
+    "bug_reproduced": true
+  }
+}

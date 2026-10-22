@@ -1,61 +1,37 @@
 {% extends "base.html" %}
+{% from '_ui.html' import steps, environment %}
 {% block title %}{{ t('nav.tasks') }}{% endblock %}
 {% block content %}
 
-{% if settings.backend == 'mock' %}
-<div class="banner warn">
-  <strong>{{ t('index.banner.mock') }}</strong>
-</div>
-{% elif not settings.allow_unattested %}
-<div class="banner warn">
-  <strong>{{ t('index.banner.gate') }}</strong>
-</div>
-{% endif %}
+
 
 <section class="hero">
   <h1>{{ t('index.hero.title') }}</h1>
   <p>{{ t('index.hero.text') }}</p>
   <p class="small"><a class="link" href="/batch">{{ t('index.batch_link') }}</a></p>
 </section>
+{{ steps(1, t) }}
+{{ environment(settings, t) }}
 
 <section class="grid tasks">
   {% for task in tasks %}
   <article class="card task-card">
     <div class="card-head">
-      <span class="mono small">{{ task.task_id }}@{{ task.version }}</span>
+      <span class="task-number">{{ '%02d'|format(loop.index) }}</span>
       <span class="badge {{ 'published' if task.get('publication_status') == 'PUBLISHED' else 'draft' }}">
         {{ label('publication', task.get('publication_status', task.get('status', 'UNKNOWN'))) }}
       </span>
     </div>
     <h2>{{ task.get('title', task.task_id) }}</h2>
-    <p class="muted">{{ t('index.case_count') }}: {{ task.get('case_count', '-') }}</p>
-    <a class="button" href="/tasks/{{ task.task_id }}@{{ task.version }}">{{ t('index.open') }}</a>
+    <p class="muted">{{ t('ui.check_count', count=task.get('case_count', '-')) }}</p>
+    <a class="button primary" href="/tasks/{{ task.task_id }}@{{ task.version }}">{{ t('index.open') }}</a>
   </article>
   {% else %}
   <p class="muted">{{ t('index.empty') }}</p>
   {% endfor %}
 </section>
 
-<section class="panel">
-  <div class="panel-head">
-    <h2>{{ t('index.backend.title') }}</h2>
-    <span class="mono small">{{ capabilities.backend_id }}</span>
-  </div>
-  <table class="kv">
-    <tr><th>{{ t('index.backend.isolation') }}</th><td>{{ capabilities.isolation }}</td></tr>
-    <tr><th>{{ t('index.backend.limits') }}</th>
-      <td>{{ '✓' if capabilities.cpu_limit else '✗' }} / {{ '✓' if capabilities.memory_limit else '✗' }} / {{ '✓' if capabilities.process_limit else '✗' }}</td></tr>
-    <tr><th>{{ t('index.backend.wall') }}</th>
-      <td>{{ '✓' if capabilities.wall_timeout else '✗' }} / {{ '✓' if capabilities.tree_kill else '✗' }}</td></tr>
-    <tr><th>{{ t('index.backend.netfs') }}</th>
-      <td>{{ '✓' if capabilities.network_block else '✗' }} / {{ '✓' if capabilities.filesystem_isolation else '✗' }}</td></tr>
-  </table>
-  {% if capabilities.notes %}
-  <ul class="notes">
-    {% for note in capabilities.notes %}<li>{{ note }}</li>{% endfor %}
-  </ul>
-  {% endif %}
-</section>
+
 
 <section class="panel">
   <div class="panel-head">
@@ -88,4 +64,24 @@
   {% endif %}
 </section>
 
+<details class="panel details technical"><summary>{{ t('ui.environment.details') }}</summary>
+  <div class="panel-head">
+    <h2>{{ t('index.backend.title') }}</h2>
+    <span class="mono small">{{ capabilities.backend_id }}</span>
+  </div>
+  <table class="kv">
+    <tr><th>{{ t('index.backend.isolation') }}</th><td>{{ capabilities.isolation }}</td></tr>
+    <tr><th>{{ t('index.backend.limits') }}</th>
+      <td>{{ '✓' if capabilities.cpu_limit else '✗' }} / {{ '✓' if capabilities.memory_limit else '✗' }} / {{ '✓' if capabilities.process_limit else '✗' }}</td></tr>
+    <tr><th>{{ t('index.backend.wall') }}</th>
+      <td>{{ '✓' if capabilities.wall_timeout else '✗' }} / {{ '✓' if capabilities.tree_kill else '✗' }}</td></tr>
+    <tr><th>{{ t('index.backend.netfs') }}</th>
+      <td>{{ '✓' if capabilities.network_block else '✗' }} / {{ '✓' if capabilities.filesystem_isolation else '✗' }}</td></tr>
+  </table>
+  {% if capabilities.notes %}
+  <ul class="notes">
+    {% for note in capabilities.notes %}<li>{{ note }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</details>
 {% endblock %}
