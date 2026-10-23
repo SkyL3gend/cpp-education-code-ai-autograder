@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import copy
+import csv
 import hashlib
 import json
 import shutil
@@ -577,6 +578,68 @@ def _birthday_web_record(tmp_path: Path, *, defect: bool = False):
     return settings, report, root, candidate, frozen, replay
 
 
+def _date_web_record(tmp_path: Path, *, defect: bool = False):
+    """Saved T3 presentation evidence; the assertions come from the task profile."""
+    from cpp_assessor.planning.target_calibration import supplemental_cases
+
+    settings, old_report, root, candidate, frozen, replay = _supplemental_web_record(tmp_path)
+    task = load_task("t3_date_validation@1.0.0")
+    profile = get_pilot_profile(task.task_id, task.version)
+    variant = "faulty" if defect else "correct"
+
+    def observations(case):
+        signatures = profile.expected_assertions(variant, case.case_id)
+        actual = copy.deepcopy(case.expected)
+        if signatures["a_created"] == "MISMATCH":
+            actual["created"] = True
+            contact = copy.deepcopy(case.input["candidate"])
+            date = contact["birthday"]
+            contact["birthday"] = f"{date['year']:04d}-{date['month']:02d}-{date['day']:02d}"
+            contact["id"] = len(actual["contacts_after"]) + 1
+            actual["contacts_after"].append(contact)
+        assertions = [{"schema_version": "1.0", "assertion_id": assertion_id, "case_id": case.case_id,
+            "operator": "EQUALS" if field == "created" else "MULTISET_EQUALS",
+            "comparison": signatures[assertion_id], "expected": case.expected[field], "actual": actual[field]}
+            for assertion_id, field in (("a_created", "created"), ("a_contacts", "contacts_after"))]
+        return actual, assertions, "MISMATCH" if "MISMATCH" in signatures.values() else "MATCH"
+
+    payload = old_report.model_dump(mode="json")
+    payload["provenance"].update(task_id=task.task_id, task_version=task.version,
+                                 task_package_hash=task.package_hash)
+    formal = []
+    for case in task.cases.values():
+        _, assertions, comparison = observations(case)
+        formal.append({"schema_version": "1.0", "case_id": case.case_id, "attempt_id": "attempt_" + case.case_id,
+            "purpose": "ASSESSMENT", "comparison": comparison, "termination": "EXITED", "protocol_status": "OK",
+            "failed_assertions": [item["assertion_id"] for item in assertions if item["comparison"] == "MISMATCH"],
+            "evidence_refs": [], "assertion_results": assertions})
+    mismatch = sum(case["comparison"] == "MISMATCH" for case in formal)
+    payload["counts"].update(required_cases=6, attempted_cases=6, completed_cases=6,
+        matched_cases=6 - mismatch, mismatched_cases=mismatch, required_assertions=12,
+        matched_assertions=12 - mismatch * 2, mismatched_assertions=mismatch * 2)
+    payload["coverage"].update(planned_cases=list(profile.formal_case_ids), completed_cases=list(profile.formal_case_ids))
+    payload["case_results"] = formal
+    report = AssessmentReport.model_validate(payload)
+    frozen["task_hash"] = task.package_hash
+    frozen["bundle"].update(task_id=task.task_id, task_version=task.version)
+    frozen["submission"]["snapshot_hash"] = "e" * 64
+    rows = []
+    for case in supplemental_cases(task):
+        actual, assertions, comparison = observations(case)
+        rows.append({"case_id": case.case_id, "label": profile.challenge_labels[case.case_id],
+            "input": case.input, "expected": case.expected, "actual": actual, "assertion_results": assertions,
+            "comparison": comparison, "termination": "EXITED", "protocol_status": "OK", "detail": None})
+    mismatch = sum(row["comparison"] == "MISMATCH" for row in rows)
+    required = len(profile.supplemental_case_ids)
+    candidate.update(policy_version=profile.challenge_policy, task_package_hash=task.package_hash,
+        verifier_bundle_hash=hash_json(frozen["bundle"]), challenge_results=rows,
+        passed=not mismatch, defect_detected=bool(mismatch), challenge_counts={"required": required,
+        "attempted": required, "matched": required - mismatch, "mismatched": mismatch, "not_compared": 0})
+    (root / "objective_report.json").write_text(report.model_dump_json(), encoding="utf-8")
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    return settings, report, root, candidate, frozen, replay
+
+
 def _add_web_calibration(report, root, challenges, frozen, replay, *, passed=True):
     profile = get_pilot_profile(report.provenance.task_id, report.provenance.task_version)
     frozen["submission"]["snapshot_hash"] = "e" * 64
@@ -606,21 +669,21 @@ def _write_web_calibration(root, calibration, challenges, frozen, replay):
     _write_supplemental_web_record(root, challenges, frozen, replay)
 
 
-def test_pilot_ui_offers_exact_t1_and_t2_uploads_without_development_choices(tmp_path):
+def test_pilot_ui_offers_exact_registered_uploads_without_development_choices(tmp_path):
     settings = WebSettings(backend="wasm_pilot", allow_unattested=True, data_root=tmp_path)
     with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
         page = client.get("/").text
         assert "/llm/tasks/t1_phone_validation@1.0.0" in page
         assert "/llm/tasks/t2_birthday_today@1.0.0" in page
-        assert "/llm/tasks/t3_date_validation@1.0.0" not in page
-        for task_id in ("t1_phone_validation", "t2_birthday_today"):
+        assert "/llm/tasks/t3_date_validation@1.0.0" in page
+        for task_id in ("t1_phone_validation", "t2_birthday_today", "t3_date_validation"):
             form = client.get(f"/llm/tasks/{task_id}@1.0.0").text
             assert 'action="/llm/runs"' in form
             assert 'name="submission"' in form
             assert 'name="variant"' not in form and 'href="/standard"' not in form
             assert "上传测评暂不可用" not in form
             assert 'fieldset class="form-fields" disabled' not in form
-        unsupported = client.get("/llm/tasks/t3_date_validation@1.0.0").text
+        unsupported = client.get("/llm/tasks/t4_name_search@1.0.0").text
         assert "当前环境暂不支持上传测评" in unsupported
         assert 'fieldset class="form-fields" disabled' in unsupported
 
@@ -642,7 +705,8 @@ def test_birthday_upload_queues_exact_version_without_model_or_compiler(tmp_path
 
 
 @pytest.mark.parametrize("task_ref", ["t2_birthday_today@2.0.0", "t2_birthday_today@1.0.1",
-                                      "t3_date_validation@1.0.0", "t2_birthday_today@"])
+                                      "t3_date_validation@1.0.1", "t3_date_validation@2.0.0",
+                                      "t4_name_search@1.0.0", "t2_birthday_today@"])
 def test_pilot_rejects_unopened_task_or_version_before_queueing(tmp_path, task_ref):
     settings = WebSettings(backend="wasm_pilot", allow_unattested=True, data_root=tmp_path)
     with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
@@ -695,9 +759,10 @@ def test_birthday_supplemental_rejects_cross_task_or_version_record(tmp_path, fi
     assert _read_target_challenges(settings, report.run_id, report) is None
 
 
-@pytest.mark.parametrize("task_id", ["t1_phone_validation", "t2_birthday_today"])
+@pytest.mark.parametrize("task_id", ["t1_phone_validation", "t2_birthday_today", "t3_date_validation"])
 def test_calibration_display_keeps_task_specific_scope(tmp_path, task_id):
-    factory = _birthday_web_record if task_id == "t2_birthday_today" else _supplemental_web_record
+    factory = {"t1_phone_validation": _supplemental_web_record,
+               "t2_birthday_today": _birthday_web_record, "t3_date_validation": _date_web_record}[task_id]
     settings, report, root, candidate, frozen, replay = factory(tmp_path)
     calibration = _add_web_calibration(report, root, candidate, frozen, replay)
     assert _read_verifier_calibration(settings, report.run_id, report) == calibration
@@ -707,8 +772,12 @@ def test_calibration_display_keeps_task_specific_scope(tmp_path, task_id):
     if task_id == "t2_birthday_today":
         assert "跨年提醒窗口、闰年二月边界、同日生日与重复姓名" in page
         assert "错误首位、空号码" not in page
+    elif task_id == "t1_phone_validation":
+        assert "11 位号码以 2 开头、空手机号、全角数字手机号" in page
     else:
-        assert "错误首位、空号码、全角数字" in page
+        profile = get_pilot_profile(task_id)
+        assert "、".join(profile.challenge_labels.values()) in page
+        assert "错误首位、空号码" not in page and "跨年提醒窗口" not in page
 
 
 @pytest.mark.parametrize("binding", ["policy", "task", "task_version", "snapshot", "environment", "qualification", "cases", "frozen_bytes"])
@@ -803,3 +872,94 @@ def test_completed_birthday_run_does_not_display_unexecuted_warning(tmp_path):
     with TestClient(create_app(settings)) as client:
         page = client.get(f"/runs/{report.run_id}").text
     assert "必测用例尚未执行" not in page
+
+
+@pytest.mark.parametrize("task_ref", ["t3_date_validation", "t3_date_validation@1.0.0"])
+@pytest.mark.parametrize("filename", ["date.cpp", "date.zip"])
+def test_date_upload_queues_exact_version_for_both_source_forms(tmp_path, monkeypatch, task_ref, filename):
+    seen = []
+    monkeypatch.setattr("cpp_assessor.interfaces.web.app.execute_llm_run", lambda options, settings: seen.append(options))
+    settings = WebSettings(backend="wasm_pilot", allow_unattested=True, data_root=tmp_path)
+    app = create_app(settings)
+    source = b"int example() { return 0; }"
+    if filename.endswith(".zip"):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("validators.cpp", source)
+        source = stream.getvalue()
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.post("/llm/runs", data={"task_ref": task_ref, "api_key": "synthetic-test-key"},
+            files={"submission": (filename, source)}, follow_redirects=False)
+        assert response.status_code == 303
+        app.state.executor.shutdown(wait=True)
+    assert len(seen) == 1
+    assert seen[0].task_ref == "t3_date_validation@1.0.0"
+    assert seen[0].submission.name == filename
+    assert seen[0].submission.read_bytes() == source
+
+
+@pytest.mark.parametrize("defect", [False, True])
+def test_date_results_show_add_contact_and_all_eight_supplemental_dates(tmp_path, monkeypatch, defect):
+    settings, report, root, challenges, frozen, replay = _date_web_record(tmp_path, defect=defect)
+    calibration = _add_web_calibration(report, root, challenges, frozen, replay)
+    monkeypatch.setattr("cpp_assessor.interfaces.web.app.make_backend", lambda *_: pytest.fail("Use only saved evidence"))
+    assert _read_target_challenges(settings, report.run_id, report) == challenges
+    assert _read_verifier_calibration(settings, report.run_id, report) == calibration
+    with TestClient(create_app(settings)) as client:
+        response = client.get(f"/runs/{report.run_id}")
+        exported = client.get(f"/runs/{report.run_id}/report.json").json()
+        csv_report = client.get(f"/runs/{report.run_id}/report.csv")
+    page = response.text
+    assert response.status_code == 200
+    assert f"{3 if defect else 6} 项符合预期，{3 if defect else 0} 项不符合预期" in page
+    assert "另外检查 8 种输入" in page and "不改变下方 6 项必测用例计数" in page
+    assert ("发现 2 项必测用例之外的差异" if defect else "8 项补充规则均符合预期") in page
+    assert "固定工程回归校准通过" in page
+    for date in ("1900-01-31", "2100-12-31", "1900-02-29", "2100-02-29", "2023-02-29", "2000-02-30",
+                 "2023-04-30", "2000-01-31", "2000-02-31"):
+        assert date in page
+    assert "待校验生日：" in page and "预期新增结果：" in page and "实际新增结果：" in page
+    assert "新增后内容符合预期" in page and "拒绝后内容保持不变" in page
+    assert "查看完整断言与 JSON" in page
+    assert "输入手机号" not in page and "空号码" not in page and "预期生日名单" not in page
+    assert exported["counts"] == report.counts.model_dump(mode="json")
+    assert exported["grade_eligible"] is False and csv_report.status_code == 200
+    csv_rows = list(csv.DictReader(io.StringIO(csv_report.content.decode("utf-8-sig"))))
+    assert len(csv_rows) == 6
+    assert {row["case_id"] for row in csv_rows} == set(get_pilot_profile("t3_date_validation").formal_case_ids)
+    assert sum(row["comparison"] == "MISMATCH" for row in csv_rows) == (3 if defect else 0)
+
+
+@pytest.mark.parametrize("malformation", ["wrong_policy", "extra_case", "three_case_summary", "wrong_task"])
+def test_date_saved_supplemental_binding_rejects_wrong_task_or_count(tmp_path, malformation):
+    settings, report, root, candidate, frozen, replay = _date_web_record(tmp_path)
+    if malformation == "wrong_policy":
+        candidate["policy_version"] = "t2-target-challenges-v1"
+    elif malformation == "extra_case":
+        candidate["challenge_results"][0]["case_id"] = "challenge_outside_profile"
+    elif malformation == "three_case_summary":
+        candidate["challenge_counts"] = {"required": 3, "attempted": 3, "matched": 3, "mismatched": 0, "not_compared": 0}
+    else:
+        frozen["bundle"]["task_id"] = "t1_phone_validation"
+        candidate["verifier_bundle_hash"] = hash_json(frozen["bundle"])
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    assert _read_target_challenges(settings, report.run_id, report) is None
+
+
+def test_date_formal_inputs_hidden_when_task_package_hash_changed(tmp_path):
+    settings, report, root, _, _, _ = _date_web_record(tmp_path)
+    report.provenance.task_package_hash = "d" * 64
+    (root / "objective_report.json").write_text(report.model_dump_json(), encoding="utf-8")
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}").text
+    assert "待校验生日：" not in page and "输入手机号" not in page
+    assert "查看完整断言与 JSON" not in page
+
+
+def test_failed_date_calibration_warns_before_explaining_student_difference(tmp_path):
+    settings, report, root, candidate, frozen, replay = _date_web_record(tmp_path, defect=True)
+    _add_web_calibration(report, root, candidate, frozen, replay, passed=False)
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}").text
+    assert "判断程序校准未通过，以下差异待核实，不能据此归责学生" in page
+    assert "这属于判断程序可靠性限制，不能据此认定学生程序错误" in page

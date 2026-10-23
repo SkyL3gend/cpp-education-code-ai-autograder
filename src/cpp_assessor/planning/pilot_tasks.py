@@ -26,6 +26,8 @@ class PilotTaskProfile:
     coverage_limits: tuple[str, ...]
     mutable_signature: str
     declared_faulty_cases: tuple[str, ...]
+    required_seed_case_ids: tuple[str, ...]
+    faulty_created_cases: tuple[str, ...]
     faulty_name_exclusions: Mapping[str, tuple[str, ...]]
 
     @property
@@ -47,7 +49,7 @@ class PilotTaskProfile:
             raise ValueError("未知参照夹具或用例")
         result = {identifier: "MATCH" for identifier in self.assertion_ids}
         if variant_id == "faulty":
-            if self.task_id == "t1_phone_validation" and case_id == "c_non_digit_11":
+            if case_id in self.faulty_created_cases:
                 return {identifier: "MISMATCH" for identifier in self.assertion_ids}
             if case_id in self.faulty_name_exclusions:
                 result["a_names"] = "MISMATCH"
@@ -67,7 +69,7 @@ _PROFILES = (
         challenge_scope="当前目标程序的额外规则观测；不改写封存任务或四项正式用例计数，不授予正式评分资格",
         coverage_limits=("封存 task@1.0.0 的 4 用例未单独覆盖 R2 的错误首位；本次独立挑战补充验证，不改写任务包", "有限回归不能证明对所有程序、所有输入和所有适配形态正确"),
         mutable_signature="bool isValidPhone(const std::string& phone) {",
-        declared_faulty_cases=("c_non_digit_11",), faulty_name_exclusions=MappingProxyType({}),
+        declared_faulty_cases=("c_non_digit_11",), required_seed_case_ids=("c_non_digit_11",), faulty_created_cases=("c_non_digit_11",), faulty_name_exclusions=MappingProxyType({}),
     ),
     PilotTaskProfile(
         task_id="t2_birthday_today", version="1.0.0", title="T2 生日提醒",
@@ -82,7 +84,35 @@ _PROFILES = (
         coverage_limits=("补充检查覆盖跨年短窗口、合法闰日边界和重复姓名多重集；非闰年 2 月 29 日的提醒约定未在题意中声明，不能据此新增缺陷结论", "有限回归不能证明对所有程序、所有输入和所有适配形态正确"),
         mutable_signature="int daysUntilBirthday(int todayYear, int todayMonth, int todayDay,\n                      int birthMonth, int birthDay) {",
         declared_faulty_cases=("c_today_exact",),
+        required_seed_case_ids=("c_today_exact",),
+        faulty_created_cases=(),
         faulty_name_exclusions=MappingProxyType({"c_today_exact": ("张伟",), "c_today_window": ("张伟",), "c_leap_day": ("钱七",), "challenge_year_boundary": ("岁末",), "challenge_leap_boundary": ("二月今日",)}),
+    ),
+    PilotTaskProfile(
+        task_id="t3_date_validation", version="1.0.0", title="T3 生日日期校验",
+        calibration_policy="t3-scaffold-regression-v1",
+        challenge_policy="t3-target-challenges-v1",
+        qualification="T3_REGRESSION_CALIBRATED",
+        formal_case_ids=("c_valid_leap", "c_valid_common", "c_invalid_1900_02_29", "c_invalid_year_low", "c_invalid_year_high", "c_invalid_april_31"),
+        challenge_labels=MappingProxyType({
+            "challenge_year_1900_valid": "1900 年下界合法日期",
+            "challenge_year_2100_valid": "2100 年上界合法日期",
+            "challenge_2100_feb29": "2100 年不是闰年",
+            "challenge_common_feb29": "普通平年二月二十九日",
+            "challenge_leap_feb30": "闰年二月三十日",
+            "challenge_april_30_valid": "四月三十日合法边界",
+            "challenge_january_31_valid": "一月三十一日合法边界",
+            "challenge_february_31": "二月三十一日",
+        }),
+        assertion_ids=("a_created", "a_contacts"),
+        scope="T3 固定工程的独立正确/缺陷夹具自动回归；不等同权威签审，不授予正式评分资格",
+        challenge_scope="当前目标程序的八项额外日期规则与完整状态观测；不改写封存任务或六项正式用例计数，不授予正式评分资格",
+        coverage_limits=("补充检查覆盖合法年份端点、世纪/普通平年的闰日、二月日数与大小月边界，并保留非空通讯录和原编号", "封存输入契约仅允许月份 1—12、日期 1—31；月份 0/13 和日期 0 未执行，不能宣称已验证这些输入", "有限回归不能证明对所有程序、所有输入和所有适配形态正确"),
+        mutable_signature="bool isValidDate(int year, int month, int day) {",
+        declared_faulty_cases=("c_invalid_1900_02_29",),
+        required_seed_case_ids=("challenge_2100_feb29", "challenge_common_feb29", "challenge_year_1900_valid"),
+        faulty_created_cases=("c_invalid_1900_02_29", "c_invalid_year_low", "c_invalid_year_high", "challenge_2100_feb29", "challenge_common_feb29"),
+        faulty_name_exclusions=MappingProxyType({}),
     ),
 )
 

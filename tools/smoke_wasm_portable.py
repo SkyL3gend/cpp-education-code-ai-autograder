@@ -7,6 +7,7 @@ import json
 import argparse
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import time
@@ -38,6 +39,10 @@ def main(folder, *, task_ref="t1_phone_validation@1.0.0",
                 and not key.upper().startswith("ASSESSOR_LLM_")):
             env.pop(key, None)
     env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
+    with socket.socket() as reservation:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            reservation.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        reservation.bind(("127.0.0.1", 8767))
     calls_path = root / "data/logs/llm_calls.jsonl"
     prior_calls = len(calls_path.read_text(encoding="utf-8").splitlines()) if calls_path.is_file() else 0
     started = time.perf_counter()
@@ -98,6 +103,13 @@ def main(folder, *, task_ref="t1_phone_validation@1.0.0",
                 logs = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()[prior_calls:] if line.strip()]
                 if sum(item.get("ok") is True for item in logs) < 2:
                     raise RuntimeError("No recorded successful model generation and review calls")
+                usages = [item["usage"] for item in logs if isinstance(item.get("usage"), dict) and item["usage"]]
+                model_usage = {key: sum(item.get(key, 0) for item in usages)
+                               for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+                model_usage["prompt_cache_hit_tokens"] = sum(
+                    item.get("prompt_cache_hit_tokens", item.get("prompt_tokens_details", {}).get("cached_tokens", 0))
+                    for item in usages)
+                model_usage["usage_recorded_calls"] = len(usages)
                 result = {"root": str(root), "run_id": run_id, "task_ref": task_ref,
                     "source": source_name, "startup_ms": startup_ms,
                     "assessment_seconds": round(time.perf_counter() - run_started, 2),
@@ -105,6 +117,8 @@ def main(folder, *, task_ref="t1_phone_validation@1.0.0",
                     "calibration_passed": calibration["passed"], "supplemental_counts": supplemental["challenge_counts"],
                     "recorded_model_calls": len(logs),
                     "successful_model_calls": sum(item.get("ok") is True for item in logs),
+                    "model_usage": model_usage,
+                    "model_request_seconds": round(sum(item.get("duration_ms", 0) for item in logs) / 1000, 2),
                     "path_contains_only_system32": True, "grade_eligible": report["grade_eligible"]}
                 destination = Path(metrics_path) if metrics_path else ROOT / "data/wasm-pilot/portable-smoke-isolated.json"
                 destination.parent.mkdir(parents=True, exist_ok=True)

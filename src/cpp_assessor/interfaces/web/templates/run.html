@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from '_ui.html' import steps, birthday_observation %}
+{% from '_ui.html' import steps, business_observation %}
 {% block title %}{{ report.run_id }}{% endblock %}
 {% block content %}
 {% set unexecuted_cases = [report.counts.required_cases - report.counts.completed_cases, 0]|max %}
@@ -59,7 +59,7 @@
 <section class="panel">
   <h2>判断程序可靠性检查</h2>
   {% if verifier_calibration.passed %}
-  <p><strong>固定工程回归校准通过</strong>：同一套判断程序在独立的正确版和已知缺陷版上均得到预期结果，并通过{% if report.provenance.task_id == 't2_birthday_today' %}跨年提醒窗口、闰年二月边界、同日生日与重复姓名{% else %}错误首位、空号码、全角数字{% endif %}的补充挑战。</p>
+  <p><strong>固定工程回归校准通过</strong>：同一套判断程序在独立的正确版和已知缺陷版上均得到预期结果，并通过{{ task_profile.challenge_labels.values()|join('、') }}的补充挑战。</p>
   <p class="muted small">已核对原有联系人及编号保持完整。本检查只适用于本题固定工程形态，不等同人工签审或正式评分资格。</p>
   {% else %}
   <p><strong>回归校准尚未通过或不适用</strong>：{{ verifier_calibration.get('reason', verifier_calibration.status) }}</p>
@@ -86,9 +86,9 @@
   {% for challenge in target_challenges.challenge_results %}
   <details class="details" {% if challenge.comparison == 'MISMATCH' %}open{% endif %}>
     <summary>{{ task_profile.challenge_labels.get(challenge.case_id, challenge.label) }} <span class="badge {{ challenge.comparison|lower }}">{{ label('comparison', challenge.comparison) }}</span></summary>
-    {% if challenge.case_id in birthday_challenges %}
-    {{ birthday_observation(birthday_challenges[challenge.case_id]) }}
-    {% else %}
+    {% if challenge.case_id in business_challenges %}
+    {{ business_observation(business_challenges[challenge.case_id]) }}
+    {% elif report.provenance.task_id == 't1_phone_validation' %}
     <p>输入手机号：<code class="json">{{ challenge.input.get('candidate', {}).get('phone') or '（空号码）' }}</code></p>
     <p><strong>预期：</strong>{% if challenge.expected.get('created') is sameas false %}拒绝新增联系人{% elif challenge.expected.get('created') is sameas true %}允许新增联系人{% else %}查看完整状态{% endif %}；
       <strong>实际：</strong>{% if challenge.actual is mapping and challenge.actual.get('created') is sameas true %}程序新增了联系人{% elif challenge.actual is mapping and challenge.actual.get('created') is sameas false %}程序拒绝新增联系人{% else %}未取得有效结果{% endif %}。</p>
@@ -145,7 +145,7 @@
     <tbody>
       {% for case in report.case_results %}
       <tr>
-        <td class="small">{% if case.case_id in birthday_cases %}{{ birthday_cases[case.case_id].label }}<br>{% endif %}<span class="mono tiny">{{ case.case_id }}</span></td>
+        <td class="small">{% if case.case_id in business_cases %}{{ business_cases[case.case_id].label }}<br>{% endif %}<span class="mono tiny">{{ case.case_id }}</span></td>
         <td><span class="badge {{ case.comparison.value|lower }}">{{ label('comparison', case.comparison.value) }}</span></td>
         <td class="small">{{ label('termination', case.termination.value) }}</td>
         <td class="mono tiny">{{ case.failed_assertions|join(', ') if case.failed_assertions else '—' }}</td>
@@ -159,12 +159,12 @@
 {% for case in report.case_results %}
 <details class="panel details" {% if case.comparison.value == 'MISMATCH' %}open{% endif %}>
   <summary>
-    <span>{% if case.case_id in birthday_cases %}{{ birthday_cases[case.case_id].label }} · {% endif %}<span class="mono">{{ case.case_id }}</span></span>
+    <span>{% if case.case_id in business_cases %}{{ business_cases[case.case_id].label }} · {% endif %}<span class="mono">{{ case.case_id }}</span></span>
     <span class="badge {{ case.comparison.value|lower }}">{{ label('comparison', case.comparison.value) }}</span>
     <span class="muted small">{{ t('run.case.assertions', count=case.assertion_results|length) }}</span>
   </summary>
-  {% if case.case_id in birthday_cases %}
-  {{ birthday_observation(birthday_cases[case.case_id]) }}
+  {% if case.case_id in business_cases %}
+  {{ business_observation(business_cases[case.case_id]) }}
   <details class="details"><summary>查看完整断言与 JSON</summary>
   {% endif %}
   <table class="table">
@@ -182,7 +182,7 @@
       {% endfor %}
     </tbody>
   </table>
-  {% if case.case_id in birthday_cases %}</details>{% endif %}
+  {% if case.case_id in business_cases %}</details>{% endif %}
 </details>
 {% endfor %}
 

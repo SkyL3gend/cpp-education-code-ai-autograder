@@ -196,7 +196,7 @@ def _read_target_challenges(settings: WebSettings, run_id: str,
             return None
         # A self-consistent record hash does not guarantee that its summary
         # agrees with its individual observations.  Never advertise a defect
-        # (or three successful checks) from a malformed or partial summary.
+        # (or a full set of successful checks) from a malformed or partial summary.
         matched = sum(row["comparison"] == "MATCH" for row in rows)
         mismatched = sum(row["comparison"] == "MISMATCH" for row in rows)
         if (candidate.get("status") not in {"COMPLETED", "UNSUPPORTED", "INVALIDATED", "CANCELLED", "BUDGET_EXCEEDED"}
@@ -299,32 +299,61 @@ def _birthday_summary(case_input: dict, expected: Any, actual: Any,
         return result if isinstance(result, list) and all(isinstance(name, str) for name in result) else None
     expected_contacts = expected.get("contacts_after") if isinstance(expected, dict) else None
     actual_contacts = actual.get("contacts_after") if isinstance(actual, dict) else None
-    return {"today": date, "days_ahead": case_input.get("days_ahead"),
+    return {"kind": "birthday", "today": date, "days_ahead": case_input.get("days_ahead"),
             "expected_names": names(expected), "actual_names": names(actual),
             "contacts_comparison": contacts_comparison,
             "expected_contacts": expected_contacts, "actual_contacts": actual_contacts}
 
 
-def _birthday_case_views(settings: WebSettings, report: AssessmentReport) -> dict[str, dict[str, Any]]:
+def _date_summary(case_input: dict, expected: Any, actual: Any,
+                  contacts_comparison: str | None = None) -> dict[str, Any]:
+    """Present the addContact contract; never infer a verdict from the date."""
+    candidate = case_input.get("candidate")
+    birthday = candidate.get("birthday") if isinstance(candidate, dict) else None
+    date = "未取得日期"
+    if isinstance(birthday, dict) and all(type(birthday.get(key)) is int for key in ("year", "month", "day")):
+        date = f"{birthday['year']:04d}-{birthday['month']:02d}-{birthday['day']:02d}"
+    def created(value):
+        result = value.get("created") if isinstance(value, dict) else None
+        return result if type(result) is bool else None
+    return {"kind": "date", "birthday": date,
+            "expected_created": created(expected), "actual_created": created(actual),
+            "contacts_comparison": contacts_comparison,
+            "expected_contacts": expected.get("contacts_after") if isinstance(expected, dict) else None,
+            "actual_contacts": actual.get("contacts_after") if isinstance(actual, dict) else None}
+
+
+def _business_summary_for(task_id: str):
+    return {"t2_birthday_today": _birthday_summary, "t3_date_validation": _date_summary}.get(task_id)
+
+
+def _business_case_views(settings: WebSettings, report: AssessmentReport) -> dict[str, dict[str, Any]]:
     """Use report assertions as observations, and only a matching task for inputs."""
-    if (report.provenance.task_id, report.provenance.task_version) != ("t2_birthday_today", "1.0.0"):
+    summary = _business_summary_for(report.provenance.task_id)
+    profile = get_pilot_profile(report.provenance.task_id, report.provenance.task_version)
+    if summary is None or profile is None:
         return {}
     try:
-        task = load_task("t2_birthday_today@1.0.0", task_library=settings.library, allow_draft=True)
+        task = load_task(profile.task_ref, task_library=settings.library, allow_draft=True)
         if task.package_hash != report.provenance.task_package_hash:
             return {}
         result = {}
         labels = {"c_today_exact": "当天生日（仅提醒今天）", "c_today_window": "当天生日与提醒窗口",
                   "c_already_passed": "已过生日", "c_leap_day": "闰年当天生日",
-                  "c_window_edge": "提醒窗口之外", "c_negative_window": "负数提醒窗口"}
+                  "c_window_edge": "提醒窗口之外", "c_negative_window": "负数提醒窗口",
+                  "c_valid_leap": "合法闰日", "c_valid_common": "合法普通日期",
+                  "c_invalid_1900_02_29": "1900 年不是闰年", "c_invalid_year_low": "年份低于 1900",
+                  "c_invalid_year_high": "年份高于 2100", "c_invalid_april_31": "四月没有 31 日"}
         for case in report.case_results:
             if case.case_id not in task.cases:
                 continue
             assertions = {item.assertion_id: item for item in case.assertion_results}
-            names, contacts = assertions.get("a_names"), assertions.get("a_contacts")
-            result[case.case_id] = _birthday_summary(task.cases[case.case_id].input,
-                {"names": names.expected if names else None, "contacts_after": contacts.expected if contacts else None},
-                {"names": names.actual if names else None, "contacts_after": contacts.actual if contacts else None},
+            result_assertion = assertions.get("a_names" if summary is _birthday_summary else "a_created")
+            field = "names" if summary is _birthday_summary else "created"
+            contacts = assertions.get("a_contacts")
+            result[case.case_id] = summary(task.cases[case.case_id].input,
+                {field: result_assertion.expected if result_assertion else None, "contacts_after": contacts.expected if contacts else None},
+                {field: result_assertion.actual if result_assertion else None, "contacts_after": contacts.actual if contacts else None},
                 contacts.comparison.value if contacts else None)
             result[case.case_id]["label"] = labels.get(case.case_id, case.case_id)
         return result
@@ -607,7 +636,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
                 raise HTTPException(status_code=403, detail="WebAssembly 试验未显式启用")
             task_id, separator, version = task_ref.partition("@")
             if get_pilot_profile(task_id, version if separator else "1.0.0") is None:
-                raise HTTPException(status_code=400, detail="当前仅开放手机号校验、生日提醒两题的 1.0.0 版本")
+                raise HTTPException(status_code=400, detail="当前仅开放任务列表中已支持的题目与版本，请从任务列表选择")
             if not separator:
                 task_ref += "@1.0.0"
         key = (api_key or "").strip()
@@ -833,11 +862,12 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         calibration = _read_verifier_calibration(settings, run_id, report)
         challenges = _read_target_challenges(settings, run_id, report)
         challenge_views = {}
-        if challenges and report.provenance.task_id == "t2_birthday_today":
+        summary = _business_summary_for(report.provenance.task_id)
+        if challenges and summary is not None:
             for challenge in challenges["challenge_results"]:
                 contacts = next((item for item in challenge.get("assertion_results", [])
                                  if isinstance(item, dict) and item.get("assertion_id") == "a_contacts"), {})
-                challenge_views[challenge["case_id"]] = _birthday_summary(
+                challenge_views[challenge["case_id"]] = summary(
                     challenge["input"], challenge["expected"], challenge["actual"], contacts.get("comparison"))
         return _render(
             request,
@@ -852,8 +882,8 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             verifier_calibration=calibration,
             target_challenges=challenges,
             task_profile=get_pilot_profile(report.provenance.task_id, report.provenance.task_version),
-            birthday_cases=_birthday_case_views(settings, report),
-            birthday_challenges=challenge_views,
+            business_cases=_business_case_views(settings, report),
+            business_challenges=challenge_views,
         )
 
     @app.get("/api/runs/{run_id}")

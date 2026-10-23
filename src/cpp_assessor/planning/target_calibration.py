@@ -29,6 +29,7 @@ from ..orchestrator.protocol import build_request, parse_response
 from ..sandbox.base import CompileRequest, RunRequest
 from ..sandbox.gate import evaluate as evaluate_gate
 from .bundle import TargetVerifierBundle, validate_bundle
+from .link_sources import select_link_sources
 from .pilot_tasks import PilotTaskProfile, get_pilot_profile
 
 POLICY_VERSION = "t1-scaffold-regression-v1"
@@ -142,12 +143,20 @@ def _fixtures_for_target(task, bundle, files):
     return "four_modules", trusted
 
 
-def _supplemental_cases(task):
+def supplemental_cases(task):
+    """Return independent, author-defined inputs and expected observations.
+
+    These cases stay outside the sealed assessment set. Every input must still
+    satisfy that task version's published input schema; no boundary exceptions
+    or model-generated answers are accepted.
+    """
     profile = get_pilot_profile(task.task_id, str(task.version))
     if profile is None:
         raise ValueError("该任务版本未登记补充规则检查")
     if profile.task_id == "t2_birthday_today":
         return _birthday_supplemental_cases(task)
+    if profile.task_id == "t3_date_validation":
+        return _date_supplemental_cases(task)
     seed = task.case("c_non_digit_11")
     challenges = []
     for identifier, phone in (("challenge_prefix_2", "23800138000"), ("challenge_empty", ""), ("challenge_fullwidth", "１３８００１３８０００")):
@@ -155,6 +164,9 @@ def _supplemental_cases(task):
         payload["candidate"]["phone"] = phone
         challenges.append(seed.model_copy(update={"case_id": identifier, "input": payload}))
     return challenges
+
+
+_supplemental_cases = supplemental_cases
 
 
 def _project_contacts(contacts):
@@ -190,16 +202,47 @@ def _birthday_supplemental_cases(task):
         for identifier, today, contacts, names in definitions]
 
 
+def _created_observation(case_input):
+    """Exact fixed-scaffold creation signature, including original seed IDs."""
+    candidate = case_input["candidate"]
+    contact = {"id": len(case_input["initial_contacts"]) + 1, **copy.deepcopy(candidate)}
+    return {"created": True, "contacts_after": _project_contacts(case_input["initial_contacts"] + [contact])}
+
+
+def _date_supplemental_cases(task):
+    """Gregorian date boundaries independently specified from published rules."""
+    seed = task.case("c_valid_common")
+    initial = [
+        {"id": 7, "name": "原联系人甲", "phone": "13800138007", "birthday": {"year": 1980, "month": 4, "day": 4}},
+        {"id": 42, "name": "原联系人乙", "phone": "13800138042", "birthday": {"year": 1991, "month": 12, "day": 31}},
+    ]
+    # Expectations are explicit author decisions, not obtained by executing a
+    # student/fixture function or by asking a model to recalculate the result.
+    definitions = (
+        ("challenge_year_1900_valid", 1900, 1, 31, True),
+        ("challenge_year_2100_valid", 2100, 12, 31, True),
+        ("challenge_2100_feb29", 2100, 2, 29, False),
+        ("challenge_common_feb29", 2023, 2, 29, False),
+        ("challenge_leap_feb30", 2000, 2, 30, False),
+        ("challenge_april_30_valid", 2023, 4, 30, True),
+        ("challenge_january_31_valid", 2000, 1, 31, True),
+        ("challenge_february_31", 2000, 2, 31, False),
+    )
+    cases = []
+    for identifier, year, month, day, created in definitions:
+        payload = {"initial_contacts": copy.deepcopy(initial), "candidate": {
+            "name": "日期边界候选", "phone": "13800138000", "birthday": {"year": year, "month": month, "day": day}}}
+        expected = _created_observation(payload) if created else {"created": False, "contacts_after": _project_contacts(initial)}
+        cases.append(seed.model_copy(update={"case_id": identifier, "input": payload, "expected": expected}))
+    return cases
+
+
 def _fixture_expectation(profile: PilotTaskProfile, case, variant: str):
     """Independently specified defect observations, never executable inputs."""
     actual = copy.deepcopy(case.expected)
     if variant == "faulty":
-        if profile.task_id == "t1_phone_validation" and case.case_id == "c_non_digit_11":
-            candidate = case.input["candidate"]
-            birth = candidate["birthday"]
-            actual["created"] = True
-            actual["contacts_after"] = _project_contacts(case.input["initial_contacts"]) + [{"id": len(case.input["initial_contacts"]) + 1,
-                "name": candidate["name"], "phone": candidate["phone"], "birthday": f"{birth['year']:04d}-{birth['month']:02d}-{birth['day']:02d}"}]
+        if case.case_id in profile.faulty_created_cases:
+            actual = _created_observation(case.input)
         for excluded in profile.faulty_name_exclusions.get(case.case_id, ()):
             actual["names"].remove(excluded)
     return actual
@@ -294,12 +337,13 @@ def calibrate_target_verifier(*, task, bundle: TargetVerifierBundle,
         compiler_flags.append("-finput-charset=UTF-8")
         record["compiler_flags"] = compiler_flags
         record["fixture_hashes"] = {name: hash_json(files) for name, files in fixtures.items()}
-        cases = [task.case(cid) for cid in task.task_spec.case_ids] + _supplemental_cases(task)
+        cases = [task.case(cid) for cid in task.task_spec.case_ids] + supplemental_cases(task)
         record["case_inputs_hash"] = hash_json({case.case_id: case.input for case in cases})
         record["formal_case_ids"] = list(task.task_spec.case_ids)
         record["supplemental_case_ids"] = [case.case_id for case in cases if case.case_id not in task.task_spec.case_ids]
         required = set(profile.assertion_ids)
-        if set(task.assertions) != required or not all(task.case(cid).input.get("initial_contacts") for cid in profile.declared_faulty_cases):
+        cases_by_id = {case.case_id: case for case in cases}
+        if set(task.assertions) != required or not all(cid in cases_by_id and cases_by_id[cid].input.get("initial_contacts") for cid in profile.required_seed_case_ids):
             return finish("UNSUPPORTED", "固定工程缺少完整状态断言或独立用例的已有联系人")
         input_validator = Draft202012Validator(task.template.input_schema)
         output_validator = Draft202012Validator(task.template.output_schema)
@@ -317,7 +361,8 @@ def calibrate_target_verifier(*, task, bundle: TargetVerifierBundle,
             driver.write_text(bundle.driver.driver_source, encoding="utf-8")
             for helper in task.harness_dir.glob("*.h"):
                 (driver_dir / helper.name).write_bytes(helper.read_bytes())
-            sources = [subject / path for path in bundle.target.sources if Path(path).suffix in {".cpp", ".cc", ".cxx"}] + [driver]
+            linked_units = select_link_sources(bundle.target.sources, bundle.driver.driver_source)
+            sources = [subject / path for path in linked_units if Path(path).suffix in {".cpp", ".cc", ".cxx"}] + [driver]
             plan = BuildPlan(schema_version="1.0", build_plan_id="target_calibration", role=BuildRole.ORIGINAL,
                 subject_snapshot_hash=hash_json(files), toolchain_id="wasi_sdk", source_units=[SourceUnit(unit_id=f"unit_{i}", origin=SourceOrigin.GENERATED if path == driver else SourceOrigin.SUBMISSION, role=BuildRole.DRIVER if path == driver else BuildRole.ORIGINAL, path=path.name) for i, path in enumerate(sources)],
                 include_dirs=[str(subject), str(driver_dir)], defines=[], libraries=[], entrypoint=None,
@@ -471,7 +516,7 @@ def run_target_challenges(*, task, bundle: TargetVerifierBundle, backend,
         if not module_bytes.startswith(b"\0asm"):
             return finish("UNSUPPORTED", "目标不是 WebAssembly，禁止回退本机运行")
         record["executable_hash"] = hashlib.sha256(module_bytes).hexdigest()
-        cases = _supplemental_cases(task)
+        cases = supplemental_cases(task)
         record["case_inputs_hash"] = hash_json({case.case_id: case.input for case in cases})
         labels = profile.challenge_labels
         if tuple(case.case_id for case in cases) != profile.supplemental_case_ids:
