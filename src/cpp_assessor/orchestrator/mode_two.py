@@ -356,9 +356,9 @@ class ModeTwoRun:
         state = self.state
         wasm_pilot = state.backend.backend_id == "wasm_pilot"
         if wasm_pilot:
-            from ..sandbox.wasm import PILOT_TASK
-            if state.task.task_id != PILOT_TASK:
-                raise BackendNotAttestedError("WebAssembly 试验目前仅支持手机号校验题")
+            from ..planning.pilot_tasks import get_pilot_profile
+            if get_pilot_profile(state.task.task_id, str(state.task.version)) is None:
+                raise BackendNotAttestedError("WebAssembly 试验目前仅支持已接入的手机号校验与生日提醒题及其固定版本")
         gate = evaluate_gate(
             state.backend.capabilities(),
             state.task.template.capability_requirements,
@@ -479,8 +479,9 @@ class ModeTwoRun:
             "requirements": {
                 "order": "先学习 reference 的完整基准测试方法和判断程序，再阅读目标源码，生成同语义判断程序。",
                 "reference_learning": "回填 method_hash、全部 setup/action/observations/assertion_ids/partition_ids，并解释观测和断言如何识别缺陷。",
-                "source_bindings": "每个 ACTION 和 OUTPUT 绑定实际目标文件、符号和原文 source_quote，不能只声明 covered。symbol 必须逐字出现在该源码中，例如 contacts 或 ContactBook::addContact；不得自行添加原文没有的命名空间前缀。source_quote 选短而明确的连续原文，必须保留空格和换行，不要重写或重新缩进整段函数。",
-                "method_steps": "迁移矩阵每行包含完整 setup_steps 和 action_steps；driver_step 使用零起始下标。",
+                "source_bindings": "每个 ACTION 和 OUTPUT 绑定实际目标文件、符号和原文 source_quote，不能只声明 covered。file 必须是实际包含 source_quote 的 target_files.path；内联函数可能在 .h 中，不能因类实现在 .cpp 就把头文件原文映射到 .cpp。symbol 必须逐字出现在该源码中，例如 contacts 或 ContactBook::addContact；不得自行添加原文没有的命名空间前缀。source_quote 选短而明确的连续原文，必须保留空格和换行，不要重写或重新缩进整段函数。",
+                "method_steps": "migration_matrix 每行的 method_steps 必须逐字包含 test_method.setup_steps 与 action_steps 中全部步骤 ID，不得以 reference_verifier 的 invoke_operation 等通用函数名替代业务步骤；driver_step 使用零起始下标。",
+                "required_method_steps_per_partition": task.method.setup_steps + task.method.action_steps,
                 "observer": "可选已注册提取器或隔离内 generated_observer C++。不能从请求补写 actual、重编号、删除演示联系人或复制基准业务实现。",
                 "generated_observer": "从 stdin 读取含 request 和原始 stdout 的 JSON；输出完整协议元数据、status、actual。只从真实输出/文件读取事实。",
                 "function_driver": "读取完整请求信封，调用映射的目标业务函数；输出协议元数据须回显 run_id/attempt_id/case_id/operation_id。",
@@ -534,7 +535,7 @@ class ModeTwoRun:
             return
         from ..planning.target_calibration import calibrate_target_verifier
         self._check_cancel()
-        self._event("TARGET_CALIBRATION_STARTED", {"scope": "independent T1 fixtures; no model requests"})
+        self._event("TARGET_CALIBRATION_STARTED", {"task": state.task.task_id, "scope": "independent task fixtures; no model requests"})
         self.verifier_calibration = calibrate_target_verifier(
             task=state.task, bundle=state.bundle, target_files=state.files,
             source_snapshot_hash=state.manifest.snapshot_hash, backend=state.backend,
@@ -1055,13 +1056,13 @@ class ModeTwoRun:
         notes.append("已通过静态检查、独立审查与探针并冻结计划；尚未获得目标级权威校准。" if self.frozen_hash else "本次未完成计划冻结，不能声明已验证完整适配。")
         if self.verifier_calibration is not None:
             calibration = self.verifier_calibration
-            notes.append("同一判断程序已通过 T1 固定工程的独立正确/缺陷夹具及补充挑战回归；此范围校准不等同权威签审。"
+            notes.append(f"同一判断程序已通过本题（{state.task.task_id}）固定工程的独立正确/缺陷夹具及补充挑战回归；此范围校准不等同权威签审。"
                 if calibration.get("passed") else "独立夹具回归校准未通过或不适用：" + str(calibration.get("reason", calibration["status"])))
         if self.target_challenges is not None:
             challenges = self.target_challenges
             counts = challenges["challenge_counts"]
             notes.append(f"当前学生程序补充规则检查：{counts['matched']} 项符合、{counts['mismatched']} 项不符、{counts['not_compared']} 项未比较；"
-                         "详情见补充检查证据，不改写四项正式用例计数或评分资格。")
+                         f"详情见补充检查证据，不改写本题 {len(state.task.task_spec.case_ids)} 项正式用例计数或评分资格。")
         if state.bundle is not None:
             notes.append(f"驱动 {state.bundle.driver.kind}，观测 {state.bundle.observer.extractor_id}")
         if state.warnings:

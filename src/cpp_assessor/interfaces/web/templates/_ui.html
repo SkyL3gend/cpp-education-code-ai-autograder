@@ -9,7 +9,7 @@
 {% endmacro %}
 {% macro environment(settings, t) %}
 {% if settings.backend == 'wasm_pilot' %}
-<div class="environment-note"><div><strong>WebAssembly 试验 · 手机号校验</strong>
+<div class="environment-note"><div><strong>WebAssembly 试验 · 手机号校验与生日提醒</strong>
 <p>程序在受限 WASI 环境中运行，编译阶段必须启用 Windows AppContainer。本版本用于本机试测，尚未通过正式隔离验收或取得正式评分资格。</p>
 <p>上传包含业务实现与头文件的 C++ ZIP，或完整的单文件 C++ 程序；不支持 Windows 系统调用。</p></div></div>
 {% elif settings.backend == 'mock' %}
@@ -31,4 +31,17 @@
 </div>
 </div>
 {% endif %}
+{% endmacro %}
+
+{% macro birthday_observation(view) %}
+<div class="birthday-observation">
+  <p>测试日期：<strong>{{ view.today }}</strong> · 提醒范围：<strong>{{ view.days_ahead }} 天</strong>（含当天及窗口末日；负数时为空）</p>
+  <p><strong>预期生日名单：</strong>{% if view.expected_names is none %}未取得有效名单{% elif view.expected_names %}{{ view.expected_names|join('、') }}{% else %}（空名单）{% endif %}</p>
+  <p><strong>实际生日名单：</strong>{% if view.actual_names is none %}未取得有效名单{% elif view.actual_names %}{{ view.actual_names|join('、') }}{% else %}（空名单）{% endif %}</p>
+  <p><strong>通讯录状态：</strong>{% if view.contacts_comparison == 'MATCH' %}内容完整保留{% elif view.contacts_comparison == 'MISMATCH' %}与预期不一致，请检查联系人是否被修改{% else %}未取得可确认的结果{% endif %}</p>
+  <details class="details"><summary>查看预期与实际通讯录</summary>
+    <p class="small">预期通讯录</p><pre class="stdout">{{ view.expected_contacts|tojson(indent=2) }}</pre>
+    <p class="small">实际通讯录</p><pre class="stdout">{{ view.actual_contacts|tojson(indent=2) }}</pre>
+  </details>
+</div>
 {% endmacro %}

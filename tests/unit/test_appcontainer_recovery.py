@@ -6,6 +6,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -179,3 +180,99 @@ def test_host_log_actual_read_has_fixed_byte_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "open", lambda path, *args, **kwargs: Reader(original_open(path, *args, **kwargs)) if path == log else original_open(path, *args, **kwargs))
     assert compiler._read_output_text(log)
     assert len(sizes) == 1
+
+
+def private_test_journal(tmp_path):
+    """Exercise real host-only file ACLs without profiles, drives or compilers."""
+    base = tmp_path / "wasm_staging"
+    base.mkdir()
+    journal = recovery.CompilerJournal.__new__(recovery.CompilerJournal)
+    journal.owner = recovery.user_sid()
+    journal.directory = recovery._journal_directory(base, journal.owner)
+    journal.path = journal.directory / (PROFILE + ".json")
+    journal.record = {"marker": "original"}
+    journal._write(create=True)
+    return journal
+
+
+def test_private_journal_update_survives_real_windows_delete_sharing_lock(tmp_path, monkeypatch):
+    journal = private_test_journal(tmp_path)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong,
+        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p]
+    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    # A read handle without FILE_SHARE_DELETE is sufficient to reproduce the
+    # exact replace failure; no ACL changes or compiler concurrency are needed.
+    handle = kernel.CreateFileW(str(journal.path), 0x80000000, 1, None, 3, 0x80, None)
+    assert handle != ctypes.c_void_p(-1).value, ctypes.get_last_error()
+    release, closed = threading.Event(), threading.Event()
+
+    def reader():
+        release.wait(5)
+        kernel.CloseHandle(handle)
+        closed.set()
+
+    thread = threading.Thread(target=reader)
+    thread.start()
+    replace, failures = os.replace, []
+
+    def observed_replace(source, destination):
+        try:
+            return replace(source, destination)
+        except OSError as exc:
+            failures.append(exc.winerror)
+            release.set()
+            raise
+
+    monkeypatch.setattr(recovery.os, "replace", observed_replace)
+    journal.record = {"marker": "updated"}
+    try:
+        journal._write()
+    finally:
+        release.set()
+        thread.join(5)
+    assert closed.is_set()
+    assert failures and all(error in {5, 32, 33} for error in failures)
+    assert json.loads(journal.path.read_text(encoding="utf-8")) == journal.record
+    assert list(journal.directory.glob("*.tmp-*")) == []
+    recovery._private_acl(journal.directory, journal.owner, directory=True)
+    recovery._private_acl(journal.path, journal.owner, directory=False)
+
+
+@pytest.mark.parametrize("error", [5, 32, 33])
+def test_journal_lock_retries_are_bounded_and_preserve_existing_record(tmp_path, monkeypatch, error):
+    journal = private_test_journal(tmp_path)
+    sleeps, attempts = [], []
+    failure = ctypes.WinError(error)
+
+    def locked(*args):
+        attempts.append(args)
+        raise failure
+
+    monkeypatch.setattr(recovery.os, "replace", locked)
+    monkeypatch.setattr(recovery.time, "sleep", sleeps.append)
+    journal.record = {"marker": "must-not-be-committed"}
+    with pytest.raises(OSError) as caught:
+        journal._write()
+    assert caught.value is failure
+    assert len(attempts) == 8 and len(sleeps) == 7
+    assert sum(sleeps) == pytest.approx(0.9)
+    assert json.loads(journal.path.read_text(encoding="utf-8")) == {"marker": "original"}
+    assert list(journal.directory.glob("*.tmp-*")) == []
+    recovery._private_acl(journal.path, journal.owner, directory=False)
+
+
+@pytest.mark.parametrize("error", [2, 3, 87])
+def test_unrelated_file_errors_are_not_retried(monkeypatch, error):
+    sleeps, attempts = [], []
+    failure = ctypes.WinError(error)
+
+    def invalid():
+        attempts.append(True)
+        raise failure
+
+    monkeypatch.setattr(recovery.time, "sleep", sleeps.append)
+    with pytest.raises(OSError) as caught:
+        recovery._retry_journal_file(invalid)
+    assert caught.value is failure and len(attempts) == 1 and not sleeps

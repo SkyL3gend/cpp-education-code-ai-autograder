@@ -39,7 +39,7 @@ def main():
     bundle = TargetVerifierBundle.model_validate_json((saved / "plans/target_bundle.json").read_text(encoding="utf-8"))
     if args.trusted_source is not None:
         source = args.trusted_source.resolve()
-    run = ModeTwoRun(RunOptions(task_ref="t1_phone_validation@1.0.0", submission=source,
+    run = ModeTwoRun(RunOptions(task_ref=f"{bundle.task_id}@{bundle.task_version}", submission=source,
         mode=Mode.LLM, backend="wasm_pilot", data_dir=args.data,
         allow_unattested=True), LLMSettings(api_key="offline-saved-bundle-no-network"), replay_bundle=bundle)
     started = time.perf_counter()

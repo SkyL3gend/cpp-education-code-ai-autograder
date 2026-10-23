@@ -486,7 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
     rejudge_parser.set_defaults(func=_cmd_rejudge)
     replay_parser = sub.add_parser("replay", help="实际重执行冻结方案，不调用模型，创建新运行")
     replay_parser.add_argument("run_id")
-    replay_parser.add_argument("--allow-wasm-pilot", action="store_true", help="显式允许可信手机号样例的 WebAssembly 试验重放")
+    replay_parser.add_argument("--allow-wasm-pilot", action="store_true", help="显式允许已支持题目可信样例的 WebAssembly 试验重放")
     replay_parser.set_defaults(func=_cmd_replay)
 
     selfcheck_parser = sub.add_parser(

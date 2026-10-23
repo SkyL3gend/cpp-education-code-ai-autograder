@@ -27,7 +27,7 @@
 
 <section class="grid tasks">
   {% for task in tasks %}
-  {% if settings.backend != 'wasm_pilot' or task.task_id == 't1_phone_validation' %}
+  {% if settings.backend != 'wasm_pilot' or pilot_profile_for(task.task_id, task.version) %}
   <article class="card task-card">
     <div class="card-head">
       <span class="task-number">{{ '%02d'|format(loop.index) }}</span>

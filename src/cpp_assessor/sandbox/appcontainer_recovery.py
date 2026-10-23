@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 import uuid
 
 from ..config import data_dir
@@ -24,6 +25,7 @@ _PROFILE = re.compile(r"cppassessor-[0-9a-f]{32}\Z")
 _COMPILE = re.compile(r"compile-[A-Za-z0-9_-]{6,64}\Z")
 _SID = re.compile(r"S-1-15-2-(?:[0-9]+-){6}[0-9]+\Z")
 _FULL_CONTROL = 0x1F01FF
+_FILE_RETRY_DELAYS = (0.02, 0.04, 0.08, 0.16, 0.20, 0.20, 0.20)
 
 _k.GetCurrentProcess.restype = wintypes.HANDLE
 _k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -249,6 +251,24 @@ def _remove_exact_drive(letter, target):
     _require(_k.DefineDosDeviceW(1 | 2 | 4 | 8, letter, target), "Unable to remove stale compiler DOS mapping")
 
 
+def _retry_journal_file(operation):
+    """Bound transient Windows sharing locks on already-private host files.
+
+    A read handle without FILE_SHARE_DELETE can make an atomic replacement
+    report ACCESS_DENIED (5), not only SHARING_VIOLATION (32). Retry the same
+    operation at most eight times, with 0.9 seconds of total backoff. Persistent
+    permission errors and all other failures still abort; no ACL, destination,
+    atomicity or recovery validation is changed. Never use this for ACL grants.
+    """
+    for attempt in range(len(_FILE_RETRY_DELAYS) + 1):
+        try:
+            return operation()
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == len(_FILE_RETRY_DELAYS):
+                raise
+            time.sleep(_FILE_RETRY_DELAYS[attempt])
+
+
 class CompilerJournal:
     """Caller holds the compiler cross-process mutex throughout this lifetime."""
     def __init__(self, *, sdk, source, output, profile, revoke):
@@ -275,10 +295,10 @@ class CompilerJournal:
             _private_acl(temporary, self.owner, directory=False)
             if create and self.path.exists():
                 raise ValueError("Compiler recovery journal collision")
-            os.replace(temporary, self.path)
+            _retry_journal_file(lambda: os.replace(temporary, self.path))
         finally:
             if temporary.exists():
-                temporary.unlink()
+                _retry_journal_file(temporary.unlink)
 
     def record_drive(self, letter, target):
         self.record["drives"].append({"letter": letter, "target": target})
@@ -286,7 +306,7 @@ class CompilerJournal:
         self._write()
 
     def complete(self):
-        self.path.unlink(missing_ok=True)
+        _retry_journal_file(lambda: self.path.unlink(missing_ok=True))
 
     def recover(self):
         for path in self.directory.glob("*.json"):
@@ -315,4 +335,4 @@ class CompilerJournal:
             result = _u.DeleteAppContainerProfile(record["profile"])
             if result < 0 and (result & 0xFFFFFFFF) not in (0x80070002, 0x80070003):
                 raise OSError(result, "Unable to remove stale compiler profile")
-            path.unlink()
+            _retry_journal_file(path.unlink)

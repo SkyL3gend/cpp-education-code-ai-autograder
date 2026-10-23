@@ -17,7 +17,10 @@ from fastapi.testclient import TestClient
 
 from cpp_assessor.domain.canonical import hash_json
 from cpp_assessor.domain.models import AssessmentReport
-from cpp_assessor.interfaces.web.app import WebSettings, _read_target_challenges, create_app
+from cpp_assessor.interfaces.web.app import (WebSettings, _read_target_challenges,
+                                           _read_verifier_calibration, create_app)
+from cpp_assessor.planning.pilot_tasks import get_pilot_profile
+from cpp_assessor.tasks.loader import load_task
 
 TASK_REF = "t1_phone_validation@1.0.0"
 
@@ -124,7 +127,7 @@ def test_task_page_hides_case_inputs_and_expected(client: TestClient) -> None:
     assert "1380013800a" not in body
 
 
-def test_variant_run_reports_pass_and_exports(client: TestClient) -> None:
+def test_variant_run_retains_trial_status_and_exports(client: TestClient) -> None:
     run_id = _start_variant_run(client)
     status = _wait_for_run(client, run_id)
     assert status["state"] == "done"
@@ -133,12 +136,13 @@ def test_variant_run_reports_pass_and_exports(client: TestClient) -> None:
     page = client.get(f"/runs/{run_id}")
     assert page.status_code == 200
     assert "Inconclusive" in page.text
-    assert "通过" in page.text
+    assert "尚未完成权威目标校准或人工签审" in page.text
     assert "c_non_digit_11" in page.text
 
     report_json = client.get(f"/runs/{run_id}/report.json")
     assert report_json.status_code == 200
     assert report_json.json()["assessment_status"] == "INCONCLUSIVE"
+    assert report_json.json()["grade_eligible"] is False
 
     report_csv = client.get(f"/runs/{run_id}/report.csv")
     assert report_csv.status_code == 200
@@ -529,3 +533,273 @@ def test_target_challenges_partial_result_cannot_claim_a_defect(tmp_path):
         page = client.get(f"/runs/{report.run_id}")
     assert "补充检查尚未获得完整可比较的结果" in page.text
     assert "发现 1 项必测用例之外的差异" not in page.text
+
+
+def _birthday_web_record(tmp_path: Path, *, defect: bool = False):
+    settings, old_report, root, candidate, frozen, replay = _supplemental_web_record(tmp_path)
+    task = load_task("t2_birthday_today@1.0.0")
+    profile = get_pilot_profile(task.task_id, task.version)
+    payload = old_report.model_dump(mode="json")
+    payload["provenance"].update(task_id=task.task_id, task_version=task.version,
+                                 task_package_hash=task.package_hash)
+    payload["counts"].update(required_cases=6, attempted_cases=6, completed_cases=6, matched_cases=6)
+    payload["coverage"].update(planned_cases=list(profile.formal_case_ids), completed_cases=list(profile.formal_case_ids))
+    payload["case_results"] = [{
+        "schema_version": "1.0", "case_id": case.case_id, "attempt_id": "attempt_" + case.case_id,
+        "purpose": "ASSESSMENT", "comparison": "MATCH", "termination": "EXITED", "protocol_status": "OK",
+        "failed_assertions": [], "evidence_refs": [], "assertion_results": [
+            {"schema_version": "1.0", "assertion_id": assertion_id, "case_id": case.case_id,
+             "operator": "MULTISET_EQUALS", "comparison": "MATCH", "expected": case.expected[field],
+             "actual": case.expected[field]} for assertion_id, field in (("a_names", "names"), ("a_contacts", "contacts_after"))
+        ]} for case in task.cases.values()]
+    report = AssessmentReport.model_validate(payload)
+    frozen["task_hash"] = task.package_hash
+    frozen["bundle"].update(task_id=task.task_id, task_version=task.version)
+    frozen["submission"]["snapshot_hash"] = "e" * 64
+    rows = []
+    for index, (case_id, title) in enumerate(profile.challenge_labels.items()):
+        expected = {"names": ["同名", "同名"], "contacts_after": [{"id": 7, "name": "原联系人"}]}
+        actual = copy.deepcopy(expected)
+        if defect and index == 0:
+            actual["names"] = []
+        rows.append({"case_id": case_id, "label": title,
+            "input": {"today": {"year": 2026, "month": 12, "day": 31}, "days_ahead": 1},
+            "expected": expected, "actual": actual,
+            "assertion_results": [{"assertion_id": "a_contacts", "comparison": "MATCH"}],
+            "comparison": "MISMATCH" if defect and index == 0 else "MATCH",
+            "termination": "EXITED", "protocol_status": "OK", "detail": None})
+    candidate.update(policy_version=profile.challenge_policy, task_package_hash=task.package_hash,
+        verifier_bundle_hash=hash_json(frozen["bundle"]), challenge_results=rows, passed=not defect,
+        defect_detected=defect, challenge_counts={"required": 3, "attempted": 3,
+            "matched": 2 if defect else 3, "mismatched": 1 if defect else 0, "not_compared": 0})
+    (root / "objective_report.json").write_text(report.model_dump_json(), encoding="utf-8")
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    return settings, report, root, candidate, frozen, replay
+
+
+def _add_web_calibration(report, root, challenges, frozen, replay, *, passed=True):
+    profile = get_pilot_profile(report.provenance.task_id, report.provenance.task_version)
+    frozen["submission"]["snapshot_hash"] = "e" * 64
+    calibration = {"schema_version": "1.0", "policy_version": profile.calibration_policy,
+        "backend_id": "wasm_pilot", "task_package_hash": report.provenance.task_package_hash,
+        "source_snapshot_hash": "e" * 64, "verifier_bundle_hash": hash_json(frozen["bundle"]),
+        "environment_digest": replay["environment_digest"], "passed": passed,
+        "status": "COMPLETED", "qualification": profile.qualification if passed else "NOT_CALIBRATED",
+        "formal_case_ids": list(profile.formal_case_ids), "supplemental_case_ids": list(profile.challenge_labels),
+        "grade_eligible": False, "verifier_validation_level": "CHECKED",
+        "outcomes": [{"variant_id": variant, "compile_status": "SUCCESS", "passed": passed,
+            "cases": [{"case_id": case_id, "passed": passed, "termination": "EXITED", "protocol_status": "OK",
+                       "assertions": profile.expected_assertions(variant, case_id),
+                       "initial_contacts_preserved": True, "defect_signature_verified": True}
+                      for case_id in profile.formal_case_ids + profile.supplemental_case_ids]}
+                     for variant in ("correct", "faulty")],
+        "scope": profile.scope, "reason": None if passed else "独立正确夹具结果不符合预期"}
+    _write_web_calibration(root, calibration, challenges, frozen, replay)
+    return calibration
+
+
+def _write_web_calibration(root, calibration, challenges, frozen, replay):
+    calibration["record_hash"] = hash_json({key: value for key, value in calibration.items() if key != "record_hash"})
+    raw = json.dumps(calibration, ensure_ascii=False).encode("utf-8")
+    (root / "plans/target_calibration.json").write_bytes(raw)
+    replay["file_hashes"]["plans/target_calibration.json"] = hashlib.sha256(raw).hexdigest()
+    _write_supplemental_web_record(root, challenges, frozen, replay)
+
+
+def test_pilot_ui_offers_exact_t1_and_t2_uploads_without_development_choices(tmp_path):
+    settings = WebSettings(backend="wasm_pilot", allow_unattested=True, data_root=tmp_path)
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        page = client.get("/").text
+        assert "/llm/tasks/t1_phone_validation@1.0.0" in page
+        assert "/llm/tasks/t2_birthday_today@1.0.0" in page
+        assert "/llm/tasks/t3_date_validation@1.0.0" not in page
+        for task_id in ("t1_phone_validation", "t2_birthday_today"):
+            form = client.get(f"/llm/tasks/{task_id}@1.0.0").text
+            assert 'action="/llm/runs"' in form
+            assert 'name="submission"' in form
+            assert 'name="variant"' not in form and 'href="/standard"' not in form
+            assert "上传测评暂不可用" not in form
+            assert 'fieldset class="form-fields" disabled' not in form
+        unsupported = client.get("/llm/tasks/t3_date_validation@1.0.0").text
+        assert "当前环境暂不支持上传测评" in unsupported
+        assert 'fieldset class="form-fields" disabled' in unsupported
+
+
+@pytest.mark.parametrize("task_ref", ["t2_birthday_today", "t2_birthday_today@1.0.0"])
+def test_birthday_upload_queues_exact_version_without_model_or_compiler(tmp_path, monkeypatch, task_ref):
+    seen = []
+    monkeypatch.setattr("cpp_assessor.interfaces.web.app.execute_llm_run", lambda options, settings: seen.append(options))
+    settings = WebSettings(backend="wasm_pilot", allow_unattested=True, data_root=tmp_path)
+    app = create_app(settings)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.post("/llm/runs", data={"task_ref": task_ref, "api_key": "synthetic-test-key"},
+                               files={"submission": ("birthday.cpp", b"int main(){}")}, follow_redirects=False)
+        assert response.status_code == 303
+        app.state.executor.shutdown(wait=True)
+    assert len(seen) == 1
+    assert seen[0].task_ref == "t2_birthday_today@1.0.0"
+    assert seen[0].submission.name == "birthday.cpp"
+
+
+@pytest.mark.parametrize("task_ref", ["t2_birthday_today@2.0.0", "t2_birthday_today@1.0.1",
+                                      "t3_date_validation@1.0.0", "t2_birthday_today@"])
+def test_pilot_rejects_unopened_task_or_version_before_queueing(tmp_path, task_ref):
+    settings = WebSettings(backend="wasm_pilot", allow_unattested=True, data_root=tmp_path)
+    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
+        response = client.post("/llm/runs", data={"task_ref": task_ref, "api_key": "test"},
+                               files={"submission": ("birthday.cpp", b"int main(){}")})
+        assert response.status_code == 400
+        assert "当前仅开放" in response.text
+        assert not client.app.state.pending
+
+
+def test_birthday_result_shows_six_formal_and_three_supplemental_observations(tmp_path, monkeypatch):
+    settings, report, root, candidate, frozen, replay = _birthday_web_record(tmp_path, defect=True)
+    calibration = _add_web_calibration(report, root, candidate, frozen, replay)
+    monkeypatch.setattr("cpp_assessor.interfaces.web.app.make_backend", lambda *_: pytest.fail("Must use saved environment"))
+    assert _read_target_challenges(settings, report.run_id, report) == candidate
+    assert _read_verifier_calibration(settings, report.run_id, report) == calibration
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}")
+        exported = client.get(f"/runs/{report.run_id}/report.json").json()
+    assert page.status_code == 200
+    assert "6 项符合预期，0 项不符合预期" in page.text
+    assert "不改变下方 6 项必测用例计数" in page.text
+    assert "发现 1 项必测用例之外的差异" in page.text
+    assert "跨年提醒窗口" in page.text and "闰年二月边界" in page.text
+    assert "2026-10-18" in page.text and "2026-12-31" in page.text
+    assert "预期生日名单：" in page.text and "实际生日名单：" in page.text
+    assert "张伟、周八" in page.text and "同名、同名" in page.text
+    assert "内容完整保留" in page.text
+    assert "查看完整断言与 JSON" in page.text
+    assert "输入手机号" not in page.text and "空号码" not in page.text
+    assert exported["counts"] == report.counts.model_dump(mode="json")
+    assert exported["grade_eligible"] is False
+
+
+@pytest.mark.parametrize("field", ["policy", "case_id", "task", "task_version", "report_version", "assertions"])
+def test_birthday_supplemental_rejects_cross_task_or_version_record(tmp_path, field):
+    settings, report, root, candidate, frozen, replay = _birthday_web_record(tmp_path)
+    if field == "policy":
+        candidate["policy_version"] = "t1-target-challenges-v1"
+    elif field == "case_id":
+        candidate["challenge_results"][0]["case_id"] = "challenge_prefix_2"
+    elif field in {"task", "task_version"}:
+        frozen["bundle"]["task_id" if field == "task" else "task_version"] = "t3_date_validation" if field == "task" else "1.0.1"
+        candidate["verifier_bundle_hash"] = hash_json(frozen["bundle"])
+    elif field == "report_version":
+        report.provenance.task_version = "2.0.0"
+    else:
+        candidate["challenge_results"][0]["assertion_results"] = None
+    _write_supplemental_web_record(root, candidate, frozen, replay)
+    assert _read_target_challenges(settings, report.run_id, report) is None
+
+
+@pytest.mark.parametrize("task_id", ["t1_phone_validation", "t2_birthday_today"])
+def test_calibration_display_keeps_task_specific_scope(tmp_path, task_id):
+    factory = _birthday_web_record if task_id == "t2_birthday_today" else _supplemental_web_record
+    settings, report, root, candidate, frozen, replay = factory(tmp_path)
+    calibration = _add_web_calibration(report, root, candidate, frozen, replay)
+    assert _read_verifier_calibration(settings, report.run_id, report) == calibration
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}").text
+    assert "固定工程回归校准通过" in page
+    if task_id == "t2_birthday_today":
+        assert "跨年提醒窗口、闰年二月边界、同日生日与重复姓名" in page
+        assert "错误首位、空号码" not in page
+    else:
+        assert "错误首位、空号码、全角数字" in page
+
+
+@pytest.mark.parametrize("binding", ["policy", "task", "task_version", "snapshot", "environment", "qualification", "cases", "frozen_bytes"])
+def test_birthday_calibration_rejects_stale_bindings(tmp_path, binding):
+    settings, report, root, candidate, frozen, replay = _birthday_web_record(tmp_path)
+    calibration = _add_web_calibration(report, root, candidate, frozen, replay)
+    if binding in {"policy", "snapshot", "environment", "qualification"}:
+        key = {"policy": "policy_version", "snapshot": "source_snapshot_hash", "environment": "environment_digest",
+               "qualification": "qualification"}[binding]
+        calibration[key] = "t1-scaffold-regression-v1" if binding == "policy" else "d" * 64
+    elif binding in {"task", "task_version"}:
+        frozen["bundle"]["task_id" if binding == "task" else "task_version"] = "t3_date_validation" if binding == "task" else "2.0.0"
+        calibration["verifier_bundle_hash"] = hash_json(frozen["bundle"])
+    elif binding == "cases":
+        calibration["formal_case_ids"] = ["c_today_exact"]
+    _write_web_calibration(root, calibration, candidate, frozen, replay)
+    if binding == "frozen_bytes":
+        with (root / "plans/frozen_plan.json").open("ab") as handle:
+            handle.write(b" ")
+    assert _read_verifier_calibration(settings, report.run_id, report) is None
+
+
+def test_failed_birthday_calibration_does_not_blame_student_for_supplemental_difference(tmp_path):
+    settings, report, root, candidate, frozen, replay = _birthday_web_record(tmp_path, defect=True)
+    _add_web_calibration(report, root, candidate, frozen, replay, passed=False)
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}").text
+    assert "判断程序校准未通过，以下差异待核实，不能据此归责学生" in page
+    assert "这属于判断程序可靠性限制，不能据此认定学生程序错误" in page
+
+
+@pytest.mark.parametrize("malformation", ["missing_case", "duplicate_case", "assertions", "expected_assertions", "preservation", "signature", "compile", "qualification"])
+def test_birthday_calibration_rejects_inconsistent_passed_summary(tmp_path, malformation):
+    settings, report, root, candidate, frozen, replay = _birthday_web_record(tmp_path)
+    calibration = _add_web_calibration(report, root, candidate, frozen, replay)
+    outcome = calibration["outcomes"][1]
+    if malformation == "missing_case":
+        outcome["cases"].pop()
+    elif malformation == "duplicate_case":
+        outcome["cases"][0] = copy.deepcopy(outcome["cases"][1])
+    elif malformation in {"assertions", "expected_assertions"}:
+        outcome["cases"][0][malformation] = {"a_names": "MATCH", "a_contacts": "MATCH"}
+    elif malformation in {"preservation", "signature"}:
+        outcome["cases"][0]["initial_contacts_preserved" if malformation == "preservation" else "defect_signature_verified"] = False
+    elif malformation == "compile":
+        outcome["compile_status"] = "INFRA_ERROR"
+    else:
+        calibration["grade_eligible"] = True
+    _write_web_calibration(root, calibration, candidate, frozen, replay)
+    assert _read_verifier_calibration(settings, report.run_id, report) is None
+
+
+def test_birthday_formal_inputs_hidden_if_task_package_changed(tmp_path):
+    settings, report, root, candidate, frozen, replay = _birthday_web_record(tmp_path)
+    report.provenance.task_package_hash = "d" * 64
+    (root / "objective_report.json").write_text(report.model_dump_json(), encoding="utf-8")
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}").text
+    assert "测试日期：" not in page
+    assert "查看完整断言与 JSON" not in page
+
+
+@pytest.mark.parametrize("execution_status,completed", [("ADAPTATION_FAILED", 0), ("CANCELLED", 0), ("CANCELLED", 2)])
+def test_birthday_incomplete_run_displays_unexecuted_separately_from_saved_counts(tmp_path, execution_status, completed):
+    settings, report, root, _, _, _ = _birthday_web_record(tmp_path)
+    payload = report.model_dump(mode="json")
+    payload["execution_status"] = execution_status
+    payload["counts"].update(attempted_cases=completed, completed_cases=completed,
+                             matched_cases=completed, mismatched_cases=0, not_compared_cases=0)
+    payload["case_results"] = payload["case_results"][:completed]
+    case_ids = payload["coverage"]["planned_cases"]
+    payload["coverage"].update(completed_cases=case_ids[:completed], missed_cases=case_ids[completed:], complete=False)
+    (root / "objective_report.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    (root / "evidence/target_challenges/target_challenges.json").unlink()
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}").text
+        exported = client.get(f"/runs/{report.run_id}/report.json").json()
+    assert f"另有 {6 - completed} 项必测用例尚未执行" in page
+    assert "未执行不代表程序通过或失败" in page
+    assert f"{completed} 项符合预期，0 项不符合预期，0 项未比较" in page
+    if execution_status == "CANCELLED":
+        assert "本次测评已取消，仅保留已完成的观测结果" in page
+    else:
+        assert "测试适配尚未完成" in page
+        assert "不能据此判断学生程序正确或错误" in page
+    assert exported["execution_status"] == execution_status
+    assert exported["counts"] == payload["counts"]
+
+
+def test_completed_birthday_run_does_not_display_unexecuted_warning(tmp_path):
+    settings, report, _, _, _, _ = _birthday_web_record(tmp_path)
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/runs/{report.run_id}").text
+    assert "必测用例尚未执行" not in page

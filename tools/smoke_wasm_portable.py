@@ -4,6 +4,7 @@ Explicit maintainer test: uploads the bundled trusted correct example. The
 local user's model settings/key are used, never copied into a release file.
 """
 import json
+import argparse
 import os
 from pathlib import Path
 import subprocess
@@ -12,9 +13,22 @@ import time
 
 import httpx
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+from cpp_assessor.planning.pilot_tasks import get_pilot_profile
 
-def main(folder):
+
+def main(folder, *, task_ref="t1_phone_validation@1.0.0",
+         source_name="examples/wasm_phone/phone_correct.cpp", expected_mismatches=0,
+         metrics_path=None):
     root = Path(folder).resolve()
+    task_id, version = task_ref.split("@", 1)
+    profile = get_pilot_profile(task_id, version)
+    if profile is None:
+        raise RuntimeError("Unsupported pilot task/version")
+    required = len(profile.formal_case_ids)
+    if not 0 <= expected_mismatches <= required:
+        raise ValueError("Invalid expected mismatch count")
     executable = root / "cpp-assessor-wasm-pilot.exe"
     if not executable.is_file():
         raise RuntimeError("Not a portable bundle directory")
@@ -24,6 +38,8 @@ def main(folder):
                 and not key.upper().startswith("ASSESSOR_LLM_")):
             env.pop(key, None)
     env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
+    calls_path = root / "data/logs/llm_calls.jsonl"
+    prior_calls = len(calls_path.read_text(encoding="utf-8").splitlines()) if calls_path.is_file() else 0
     started = time.perf_counter()
     with (root / "smoke-server.log").open("wb") as log:
         process = subprocess.Popen([str(executable), "web", "--backend", "wasm_pilot",
@@ -44,17 +60,19 @@ def main(folder):
                 else:
                     raise RuntimeError("Portable server startup timed out")
                 startup_ms = round((time.perf_counter() - started) * 1000)
-                source = root / "examples/wasm_phone/phone_correct.cpp"
+                source = (root / source_name).resolve()
+                if not source.is_relative_to(root) or not source.is_file():
+                    raise RuntimeError("Trusted source must be a file inside the portable package")
                 with source.open("rb") as content:
                     response = client.post("http://127.0.0.1:8767/llm/runs", timeout=30,
-                        data={"task_ref": "t1_phone_validation@1.0.0"},
+                        data={"task_ref": task_ref},
                         files={"submission": (source.name, content)})
                 if response.status_code != 303:
                     raise RuntimeError("Upload failed: " + str(response.status_code))
                 run_id = response.headers["location"].split("/")[-1]
                 print("Portable upload started:", run_id, "startup_ms:", startup_ms, flush=True)
                 run_started = time.perf_counter()
-                for _ in range(600):
+                for _ in range(1200):
                     status = client.get(f"http://127.0.0.1:8767/api/runs/{run_id}").json()
                     if status["state"] in {"done", "failed"}:
                         break
@@ -63,27 +81,33 @@ def main(folder):
                     raise RuntimeError("Portable assessment timed out")
                 report_path = root / "data/runs" / run_id / "objective_report.json"
                 report = json.loads(report_path.read_text(encoding="utf-8"))
-                if report["execution_status"] != "COMPLETED" or report["counts"]["matched_cases"] != 4:
+                if (report["execution_status"] != "COMPLETED"
+                        or report["counts"]["matched_cases"] != required - expected_mismatches
+                        or report["counts"]["mismatched_cases"] != expected_mismatches
+                        or report["counts"]["not_compared_cases"] != 0):
                     raise RuntimeError("Assessment failed: " + json.dumps(status, ensure_ascii=False))
                 run_root = report_path.parent
                 calibration = json.loads((run_root / "plans/target_calibration.json").read_text(encoding="utf-8"))
                 supplemental = json.loads((run_root / "evidence/target_challenges/target_challenges.json").read_text(encoding="utf-8"))
-                if not calibration.get("passed") or not supplemental.get("passed"):
+                if (not calibration.get("passed") or supplemental.get("status") != "COMPLETED"
+                        or (expected_mismatches == 0 and not supplemental.get("passed"))):
                     raise RuntimeError("Isolated pilot calibration or supplemental checks did not pass")
                 page = client.get(f"http://127.0.0.1:8767/runs/{run_id}")
                 if page.status_code != 200 or any(text not in page.text for text in ("WebAssembly", "补充规则检查", "固定工程回归校准通过")):
                     raise RuntimeError("Result page failed")
-                logs = [json.loads(line) for line in (root / "data/logs/llm_calls.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+                logs = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()[prior_calls:] if line.strip()]
                 if sum(item.get("ok") is True for item in logs) < 2:
                     raise RuntimeError("No recorded successful model generation and review calls")
-                result = {"root": str(root), "run_id": run_id, "startup_ms": startup_ms,
+                result = {"root": str(root), "run_id": run_id, "task_ref": task_ref,
+                    "source": source_name, "startup_ms": startup_ms,
                     "assessment_seconds": round(time.perf_counter() - run_started, 2),
                     "execution_status": report["execution_status"], "counts": report["counts"],
                     "calibration_passed": calibration["passed"], "supplemental_counts": supplemental["challenge_counts"],
                     "recorded_model_calls": len(logs),
                     "successful_model_calls": sum(item.get("ok") is True for item in logs),
                     "path_contains_only_system32": True, "grade_eligible": report["grade_eligible"]}
-                destination = Path(__file__).resolve().parents[1] / "data/wasm-pilot/portable-smoke-isolated.json"
+                destination = Path(metrics_path) if metrics_path else ROOT / "data/wasm-pilot/portable-smoke-isolated.json"
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(json.dumps(result, indent=2), encoding="utf-8")
                 print(json.dumps(result, indent=2), flush=True)
         finally:
@@ -92,4 +116,12 @@ def main(folder):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("folder")
+    parser.add_argument("--task", default="t1_phone_validation@1.0.0")
+    parser.add_argument("--source", default="examples/wasm_phone/phone_correct.cpp")
+    parser.add_argument("--expected-mismatches", type=int, default=0)
+    parser.add_argument("--metrics", type=Path)
+    args = parser.parse_args()
+    main(args.folder, task_ref=args.task, source_name=args.source,
+         expected_mismatches=args.expected_mismatches, metrics_path=args.metrics)

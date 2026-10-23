@@ -389,8 +389,14 @@ def validate_bundle(
         binding = bindings.get(binding_key)
         if binding is None:
             result.problems.append(f"缺少目标源码证据映射：{binding_key}")
-        elif binding.file not in files or binding.source_quote not in files[binding.file]:
-            result.problems.append(f"源码映射引用不存在：{binding.key}")
+        elif binding.file not in files:
+            result.problems.append(f"源码映射文件不存在：{binding.key} -> {binding.file}；可用文件：{sorted(files)}")
+        elif binding.source_quote not in files[binding.file]:
+            matches = sorted(path for path, text in files.items() if binding.source_quote in text)
+            result.problems.append(
+                f"源码映射引用不存在：{binding.key}；source_quote 不在声明文件 {binding.file} 中；"
+                f"相同原文所在文件：{matches}。必须声明实际包含该原文的文件，头文件内联实现不能映射到 .cpp。"
+            )
         elif binding.symbol not in files[binding.file]:
             result.problems.append(f"源码映射符号不存在：{binding.symbol}")
 
@@ -554,7 +560,8 @@ def validate_bundle(
         if row.status != "covered" or not row.observation.strip():
             result.problems.append(f"分区 {row.partition_id} 未覆盖观测")
         if not required_steps <= set(row.method_steps):
-            result.problems.append(f"分区 {row.partition_id} 缺少基准操作步骤映射")
+            missing_steps = sorted(required_steps - set(row.method_steps))
+            result.problems.append(f"分区 {row.partition_id} 缺少基准操作步骤映射：{missing_steps}")
         if not set(required_assertions) <= set(row.assertion_ids):
             result.problems.append(f"分区 {row.partition_id} 缺少必需断言")
         if bundle.driver.kind == "stdin_script":

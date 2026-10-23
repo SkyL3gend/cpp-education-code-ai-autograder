@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from '_ui.html' import steps, environment %}
 {% set is_llm = llm_mode|default(false) %}
-{% set upload_blocked = settings.backend in ['local', 'local_win32_job'] or (settings.backend == 'wasm_pilot' and (not settings.allow_unattested or task.task_id != 't1_phone_validation')) %}
+{% set upload_blocked = settings.backend in ['local', 'local_win32_job'] or (settings.backend == 'wasm_pilot' and (not settings.allow_unattested or not pilot_profile_for(task.task_id, task.version))) %}
 {% block title %}{{ task.task_spec.title }}{% endblock %}
 {% block content %}
 <p class="crumbs">

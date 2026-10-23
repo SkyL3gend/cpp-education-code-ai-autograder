@@ -38,7 +38,7 @@ def main():
         "--add-data", str(ROOT / "src/cpp_assessor/interfaces/web/static") + os.pathsep + "cpp_assessor/interfaces/web/static",
         *extra_data, str(ROOT / "tools/wasm_portable_entry.py")], check=True, cwd=ROOT)
     out = ROOT / "dist" / NAME
-    for folder in ("task_library", "skills/cpp-microchange-judge-author", "examples/wasm_phone"):
+    for folder in ("task_library", "skills/cpp-microchange-judge-author", "examples/wasm_phone", "examples/wasm_birthday"):
         shutil.copytree(ROOT / folder, out / folder, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     # Only WASIp1, exceptions enabled, no LTO, no debugger/clang shared library.
@@ -66,19 +66,26 @@ def main():
         shutil.copyfile(source, out / "tools/wasi-sdk/bin" / name)
     (out / "START.cmd").write_text('@echo off\r\ncd /d "%~dp0"\r\n"cpp-assessor-wasm-pilot.exe"\r\npause\r\n', encoding="ascii")
     (out / "README.txt").write_text(
-        "C++ 手机号校验 / WebAssembly 本地试验包\n\n"
+        "C++ 手机号校验与生日提醒 / WebAssembly 本地试验包\n\n"
         "Windows x64：解压到可写目录，双击 START.cmd。无需另装 Python、编译器、Docker 或 WSL。\n"
-        "打开 http://127.0.0.1:8766 ，选择手机号校验，上传 examples/wasm_phone 中的 cpp 或 zip。\n"
+        "打开 http://127.0.0.1:8766 ，选择手机号校验或生日提醒，上传对应 examples 目录中的 cpp 或 zip。\n"
         "模型调用需要联网，在页面填写你自己的 API Key；发行包不含密钥。默认 DeepSeek 兼容服务。\n"
         "已有 8766 服务时，可运行 exe web --backend wasm_pilot --allow-unattested-backend --port 8767。\n"
         "本地试验包：WASI 仅开放标准输入输出，原生编译工具强制在 Windows AppContainer 内运行。\n"
         "隔离不可用即停止，不回退本机运行学生程序；尚未完成公开不可信上传服务的安全验收。\n"
         "固定工程判断程序增加正确/缺陷夹具回归，并单独展示学生程序的三项补充规则检查。\n"
         "结果可展示真实观测及不匹配；试验后端和 CHECKED 判断程序不具备正式评分资格。\n"
+        "完整操作见 docs/使用手册.md；两题的验证范围分别见 docs/reviews/ 下记录。\n"
         "仅在当前机器验证过，未完成干净 Windows 镜像兼容性及再分发许可验收。\n",
         encoding="utf-8")
     if (ROOT / "docs/reviews/wasm-phone-pilot.md").exists():
         shutil.copyfile(ROOT / "docs/reviews/wasm-phone-pilot.md", out / "VALIDATION.md")
+    for relative in ("docs/使用手册.md", "docs/reviews/wasm-phone-pilot.md", "docs/reviews/wasm-birthday-pilot.md"):
+        source = ROOT / relative
+        if source.is_file():
+            target = out / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
     dependencies = {name: importlib.metadata.version(name) for name in
                     ("wasmtime", "fastapi", "uvicorn", "pydantic", "pyinstaller")}
     inventory = [{"path": p.relative_to(out).as_posix(), "bytes": p.stat().st_size,

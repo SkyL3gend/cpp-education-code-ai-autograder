@@ -40,6 +40,7 @@ from ...domain.canonical import hash_json
 from ...llm import LLMSettings
 from ...orchestrator.mode_two import execute_llm_run
 from ...orchestrator.runner import RunOptions, execute_standard_run, make_backend, new_run_id
+from ...planning.pilot_tasks import get_pilot_profile
 from ...reporting.export import CSV_COLUMNS, report_json, report_rows
 from ...selfcheck import (
     default_reference_source,
@@ -73,7 +74,7 @@ TERMINAL_WORKFLOW_STATES = {"COMPLETED", "FAILED", "CANCELLED"}
 
 # 判定理由代码 → 面向教师的中文说明（只做展示翻译，不改变判定）。
 REASON_LABELS = {
-    "VALIDATION_LEVEL_CHECKED": "只完成适配检查和试跑，尚未校准；保留测试证据，不作正式通过/失败判定。",
+    "VALIDATION_LEVEL_CHECKED": "已完成适配检查，尚未完成权威目标校准或人工签审；有限范围回归不授予正式评分资格，保留测试证据供复核。",
     "BUILD_ATTRIBUTION_UNCONFIRMED": "尚未确认错误来自学生原程序，不能据此判失败。",
     "EXECUTION_BACKEND_NOT_ATTESTED": "执行后端未通过隔离能力门禁，本次不计入正式成绩",
     "ASSERTION_MISMATCH": "存在与预期不一致的必需断言",
@@ -155,6 +156,10 @@ def _read_target_challenges(settings: WebSettings, run_id: str,
         if not all(isinstance(item, dict) for item in (candidate, frozen, replay)):
             return None
         bundle = frozen["bundle"]
+        profile = get_pilot_profile(bundle["task_id"], bundle["task_version"])
+        if profile is None:
+            return None
+        required = len(profile.challenge_labels)
         artifact = bundle["build"]["artifact_name"]
         if (artifact not in {"subject.wasm", "subject.exe"}
                 or any(not isinstance(candidate.get(key), str)
@@ -162,13 +167,13 @@ def _read_target_challenges(settings: WebSettings, run_id: str,
                        for key in ("environment_digest", "executable_hash"))):
             return None
         if not (report.run_id == run_id == candidate.get("run_id")
-                and candidate.get("policy_version") == "t1-target-challenges-v1"
+                and candidate.get("policy_version") == profile.challenge_policy
                 and candidate.get("purpose") == "SUPPLEMENTAL_RULE_CHECK"
                 and candidate.get("backend_id") == report.provenance.execution_backend == "wasm_pilot"
                 and candidate.get("task_package_hash") == frozen["task_hash"] == report.provenance.task_package_hash
                 and frozen["submission"]["submission_id"] == report.provenance.submission_id
-                and bundle["task_id"] == report.provenance.task_id == "t1_phone_validation"
-                and bundle["task_version"] == report.provenance.task_version == "1.0.0"
+                and bundle["task_id"] == report.provenance.task_id == profile.task_id
+                and bundle["task_version"] == report.provenance.task_version == profile.version
                 and candidate.get("verifier_bundle_hash") == hash_json(bundle)
                 and candidate.get("environment_digest") == replay["environment_digest"]
                 and candidate.get("executable_hash") == replay["file_hashes"]["generated/build/" + artifact]
@@ -176,14 +181,16 @@ def _read_target_challenges(settings: WebSettings, run_id: str,
                 and candidate.get("record_hash") == hash_json({key: value for key, value in candidate.items() if key != "record_hash"})):
             return None
         rows, counts = candidate["challenge_results"], candidate["challenge_counts"]
-        allowed_cases = {"challenge_prefix_2", "challenge_empty", "challenge_fullwidth"}
-        if (not isinstance(rows, list) or len(rows) > 3 or not isinstance(counts, dict)
+        allowed_cases = set(profile.challenge_labels)
+        if (not isinstance(rows, list) or len(rows) > required or not isinstance(counts, dict)
                 or any(not isinstance(row, dict) or row.get("case_id") not in allowed_cases
                        or row.get("comparison") not in {"MATCH", "MISMATCH", "NOT_COMPARED"}
                        or not isinstance(row.get("input"), dict) or not isinstance(row.get("expected"), dict)
+                       or ("assertion_results" in row and (not isinstance(row["assertion_results"], list)
+                           or any(not isinstance(item, dict) for item in row["assertion_results"])))
                        or "actual" not in row for row in rows)
                 or len({row["case_id"] for row in rows}) != len(rows)
-                or any(type(counts.get(key)) is not int or not 0 <= counts[key] <= 3
+                or any(type(counts.get(key)) is not int or not 0 <= counts[key] <= required
                        for key in ("required", "attempted", "matched", "mismatched", "not_compared"))
                 or type(candidate.get("passed")) is not bool or type(candidate.get("defect_detected")) is not bool):
             return None
@@ -193,14 +200,136 @@ def _read_target_challenges(settings: WebSettings, run_id: str,
         matched = sum(row["comparison"] == "MATCH" for row in rows)
         mismatched = sum(row["comparison"] == "MISMATCH" for row in rows)
         if (candidate.get("status") not in {"COMPLETED", "UNSUPPORTED", "INVALIDATED", "CANCELLED", "BUDGET_EXCEEDED"}
-                or counts != {"required": 3, "attempted": len(rows), "matched": matched,
-                              "mismatched": mismatched, "not_compared": 3 - matched - mismatched}
-                or candidate["passed"] != (candidate["status"] == "COMPLETED" and matched == 3)
+                or counts != {"required": required, "attempted": len(rows), "matched": matched,
+                              "mismatched": mismatched, "not_compared": required - matched - mismatched}
+                or candidate["passed"] != (candidate["status"] == "COMPLETED" and matched == required)
                 or candidate["defect_detected"] != (candidate["status"] == "COMPLETED" and mismatched > 0)):
             return None
         return candidate
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
+
+
+def _read_verifier_calibration(settings: WebSettings, run_id: str,
+                               report: AssessmentReport) -> dict[str, Any] | None:
+    """Bind a saved reliability check to its task and frozen historical plan."""
+    root = _run_dir(settings, run_id)
+    try:
+        paths = [root / "plans/target_calibration.json", root / "plans/frozen_plan.json",
+                 root / "plans/replay_manifest.json"]
+        if any(not path.is_file() or path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024 for path in paths):
+            return None
+        raw, frozen_raw, replay_raw = [path.read_bytes() for path in paths]
+        candidate, frozen, replay = [json.loads(item.decode("utf-8")) for item in (raw, frozen_raw, replay_raw)]
+        if not all(isinstance(item, dict) for item in (candidate, frozen, replay)):
+            return None
+        bundle = frozen["bundle"]
+        profile = get_pilot_profile(bundle["task_id"], bundle["task_version"])
+        if profile is None or type(candidate.get("passed")) is not bool:
+            return None
+        if not (report.run_id == run_id
+                and candidate.get("policy_version") == profile.calibration_policy
+                and candidate.get("backend_id") == report.provenance.execution_backend == "wasm_pilot"
+                and bundle["task_id"] == report.provenance.task_id == profile.task_id
+                and bundle["task_version"] == report.provenance.task_version == profile.version
+                and candidate.get("task_package_hash") == frozen["task_hash"] == report.provenance.task_package_hash
+                and candidate.get("record_hash") == hash_json({key: value for key, value in candidate.items() if key != "record_hash"})
+                and frozen["submission"]["submission_id"] == report.provenance.submission_id
+                and candidate.get("source_snapshot_hash") == frozen["submission"]["snapshot_hash"]
+                and isinstance(candidate.get("source_snapshot_hash"), str)
+                and re.fullmatch(r"[a-f0-9]{64}", candidate["source_snapshot_hash"])
+                and candidate.get("verifier_bundle_hash") == hash_json(bundle)
+                and candidate.get("environment_digest") == replay["environment_digest"]
+                and isinstance(candidate.get("environment_digest"), str)
+                and re.fullmatch(r"[a-f0-9]{64}", candidate["environment_digest"])
+                and replay["file_hashes"].get("plans/target_calibration.json") == hashlib.sha256(raw).hexdigest()
+                and replay["file_hashes"].get("plans/frozen_plan.json") == hashlib.sha256(frozen_raw).hexdigest()):
+            return None
+        if candidate["passed"] and not (candidate.get("status") == "COMPLETED"
+                and candidate.get("qualification") == profile.qualification
+                and candidate.get("formal_case_ids") == list(profile.formal_case_ids)
+                and candidate.get("supplemental_case_ids") == list(profile.challenge_labels)
+                and _calibration_summary_consistent(candidate, profile)):
+            return None
+        return candidate
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
+def _calibration_summary_consistent(record: dict[str, Any], profile) -> bool:
+    """A passed headline must agree with every saved independent fixture row.
+
+    T1 records predate expected_assertions, so derive that field from the same
+    versioned profile when absent. This does not replay or authenticate results.
+    """
+    if record.get("grade_eligible") is not False or record.get("verifier_validation_level") != "CHECKED":
+        return False
+    outcomes = record.get("outcomes")
+    if (not isinstance(outcomes, list) or len(outcomes) != 2
+            or any(not isinstance(item, dict) for item in outcomes)
+            or {item.get("variant_id") for item in outcomes} != {"correct", "faulty"}):
+        return False
+    case_ids = set(profile.formal_case_ids + profile.supplemental_case_ids)
+    for outcome in outcomes:
+        rows = outcome.get("cases")
+        if (outcome.get("passed") is not True or outcome.get("compile_status") != "SUCCESS"
+                or not isinstance(rows, list) or len(rows) != len(case_ids)
+                or any(not isinstance(row, dict) for row in rows)
+                or {row.get("case_id") for row in rows} != case_ids):
+            return False
+        for row in rows:
+            expected = profile.expected_assertions(outcome["variant_id"], row["case_id"])
+            if (row.get("passed") is not True or row.get("termination") != "EXITED"
+                    or row.get("protocol_status") != "OK" or row.get("assertions") != expected
+                    or row.get("expected_assertions", expected) != expected
+                    or row.get("initial_contacts_preserved") is not True
+                    or row.get("defect_signature_verified") is not True):
+                return False
+    return True
+
+
+def _birthday_summary(case_input: dict, expected: Any, actual: Any,
+                      contacts_comparison: str | None = None) -> dict[str, Any]:
+    today = case_input.get("today")
+    date = "未取得日期"
+    if isinstance(today, dict) and all(type(today.get(key)) is int for key in ("year", "month", "day")):
+        date = f"{today['year']:04d}-{today['month']:02d}-{today['day']:02d}"
+    def names(value):
+        result = value.get("names") if isinstance(value, dict) else None
+        return result if isinstance(result, list) and all(isinstance(name, str) for name in result) else None
+    expected_contacts = expected.get("contacts_after") if isinstance(expected, dict) else None
+    actual_contacts = actual.get("contacts_after") if isinstance(actual, dict) else None
+    return {"today": date, "days_ahead": case_input.get("days_ahead"),
+            "expected_names": names(expected), "actual_names": names(actual),
+            "contacts_comparison": contacts_comparison,
+            "expected_contacts": expected_contacts, "actual_contacts": actual_contacts}
+
+
+def _birthday_case_views(settings: WebSettings, report: AssessmentReport) -> dict[str, dict[str, Any]]:
+    """Use report assertions as observations, and only a matching task for inputs."""
+    if (report.provenance.task_id, report.provenance.task_version) != ("t2_birthday_today", "1.0.0"):
+        return {}
+    try:
+        task = load_task("t2_birthday_today@1.0.0", task_library=settings.library, allow_draft=True)
+        if task.package_hash != report.provenance.task_package_hash:
+            return {}
+        result = {}
+        labels = {"c_today_exact": "当天生日（仅提醒今天）", "c_today_window": "当天生日与提醒窗口",
+                  "c_already_passed": "已过生日", "c_leap_day": "闰年当天生日",
+                  "c_window_edge": "提醒窗口之外", "c_negative_window": "负数提醒窗口"}
+        for case in report.case_results:
+            if case.case_id not in task.cases:
+                continue
+            assertions = {item.assertion_id: item for item in case.assertion_results}
+            names, contacts = assertions.get("a_names"), assertions.get("a_contacts")
+            result[case.case_id] = _birthday_summary(task.cases[case.case_id].input,
+                {"names": names.expected if names else None, "contacts_after": contacts.expected if contacts else None},
+                {"names": names.actual if names else None, "contacts_after": contacts.actual if contacts else None},
+                contacts.comparison.value if contacts else None)
+            result[case.case_id]["label"] = labels.get(case.case_id, case.case_id)
+        return result
+    except (AssessorError, OSError, ValueError, TypeError, KeyError):
+        return {}
 
 
 def _stored_error(settings: WebSettings, run_id: str) -> str | None:
@@ -362,6 +491,7 @@ def _render(
     context.setdefault("lang", lang)
     context.setdefault("t", translator(lang))
     context.setdefault("label", label)
+    context.setdefault("pilot_profile_for", get_pilot_profile)
     context.setdefault("switch_url", _language_switch_url(request))
     response = templates.TemplateResponse(
         request=request, name=name, context=context, status_code=status_code
@@ -475,8 +605,11 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         if settings.backend == "wasm_pilot":
             if not settings.allow_unattested:
                 raise HTTPException(status_code=403, detail="WebAssembly 试验未显式启用")
-            if task_ref not in {"t1_phone_validation", "t1_phone_validation@1.0.0"}:
-                raise HTTPException(status_code=400, detail="WebAssembly 试验仅支持手机号校验题")
+            task_id, separator, version = task_ref.partition("@")
+            if get_pilot_profile(task_id, version if separator else "1.0.0") is None:
+                raise HTTPException(status_code=400, detail="当前仅开放手机号校验、生日提醒两题的 1.0.0 版本")
+            if not separator:
+                task_ref += "@1.0.0"
         key = (api_key or "").strip()
         try:
             llm_settings = LLMSettings.from_env(api_key=key or None)
@@ -697,23 +830,15 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
                 error=error,
                 settings=settings,
             )
-        calibration = None
-        calibration_path = _run_dir(settings, run_id) / "plans/target_calibration.json"
-        try:
-            if calibration_path.is_file() and calibration_path.stat().st_size < 4 * 1024 * 1024:
-                candidate = json.loads(calibration_path.read_text(encoding="utf-8"))
-                frozen = json.loads((_run_dir(settings, run_id) / "plans/frozen_plan.json").read_text(encoding="utf-8"))
-                replay = json.loads((_run_dir(settings, run_id) / "plans/replay_manifest.json").read_text(encoding="utf-8"))
-                if (isinstance(candidate, dict) and candidate.get("task_package_hash") == report.provenance.task_package_hash
-                        and candidate.get("record_hash") == hash_json({k: v for k, v in candidate.items() if k != "record_hash"})
-                        and frozen["submission"]["submission_id"] == report.provenance.submission_id
-                        and candidate.get("source_snapshot_hash") == frozen["submission"]["snapshot_hash"]
-                        and candidate.get("verifier_bundle_hash") == hash_json(frozen["bundle"])
-                        and candidate.get("environment_digest") == replay["environment_digest"]
-                        and replay["file_hashes"].get("plans/target_calibration.json") == hashlib.sha256(calibration_path.read_bytes()).hexdigest()):
-                    calibration = candidate
-        except (OSError, ValueError, TypeError, KeyError):
-            pass
+        calibration = _read_verifier_calibration(settings, run_id, report)
+        challenges = _read_target_challenges(settings, run_id, report)
+        challenge_views = {}
+        if challenges and report.provenance.task_id == "t2_birthday_today":
+            for challenge in challenges["challenge_results"]:
+                contacts = next((item for item in challenge.get("assertion_results", [])
+                                 if isinstance(item, dict) and item.get("assertion_id") == "a_contacts"), {})
+                challenge_views[challenge["case_id"]] = _birthday_summary(
+                    challenge["input"], challenge["expected"], challenge["actual"], contacts.get("comparison"))
         return _render(
             request,
             templates,
@@ -725,7 +850,10 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             reason_labels=REASON_LABELS,
             settings=settings,
             verifier_calibration=calibration,
-            target_challenges=_read_target_challenges(settings, run_id, report),
+            target_challenges=challenges,
+            task_profile=get_pilot_profile(report.provenance.task_id, report.provenance.task_version),
+            birthday_cases=_birthday_case_views(settings, report),
+            birthday_challenges=challenge_views,
         )
 
     @app.get("/api/runs/{run_id}")

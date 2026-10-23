@@ -24,8 +24,6 @@ from .base import CompileOutcome
 from .local import LocalJobBackend
 from .wasm_staging import staged_compile
 
-PILOT_TASK = "t1_phone_validation"
-
 
 def sdk_root() -> Path:
     return Path(os.environ.get("ASSESSOR_WASI_SDK", str(PROJECT_ROOT / "tools" / "wasi-sdk"))).resolve()
