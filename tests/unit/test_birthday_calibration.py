@@ -120,7 +120,7 @@ def calibration(tmp_path, *, modules=False, **options):
 
 
 def test_profiles_are_precise_and_reject_unknown_versions():
-    assert PILOT_TASK_REFS == {"t1_phone_validation@1.0.0", "t2_birthday_today@1.0.0", "t3_date_validation@1.0.0"}
+    assert PILOT_TASK_REFS == {"t1_phone_validation@1.0.0", "t2_birthday_today@1.0.0", "t3_date_validation@1.0.0", "t4_name_search@1.0.0"}
     assert get_pilot_profile("t2_birthday_today", "1.0.1") is None
     assert get_pilot_profile("unknown") is None
     profile = get_pilot_profile("t2_birthday_today")

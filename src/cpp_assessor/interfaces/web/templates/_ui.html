@@ -47,7 +47,7 @@
 {% endmacro %}
 
 {% macro business_observation(view) %}
-{% if view.kind == 'birthday' %}{{ birthday_observation(view) }}{% elif view.kind == 'date' %}{{ date_observation(view) }}{% endif %}
+{% if view.kind == 'birthday' %}{{ birthday_observation(view) }}{% elif view.kind == 'date' %}{{ date_observation(view) }}{% elif view.kind == 'search' %}{{ search_observation(view) }}{% endif %}
 {% endmacro %}
 
 {% macro birthday_observation(view) %}
@@ -56,6 +56,29 @@
   <p><strong>预期生日名单：</strong>{% if view.expected_names is none %}未取得有效名单{% elif view.expected_names %}{{ view.expected_names|join('、') }}{% else %}（空名单）{% endif %}</p>
   <p><strong>实际生日名单：</strong>{% if view.actual_names is none %}未取得有效名单{% elif view.actual_names %}{{ view.actual_names|join('、') }}{% else %}（空名单）{% endif %}</p>
   <p><strong>通讯录状态：</strong>{% if view.contacts_comparison == 'MATCH' %}内容完整保留{% elif view.contacts_comparison == 'MISMATCH' %}与预期不一致，请检查联系人是否被修改{% else %}未取得可确认的结果{% endif %}</p>
+  <details class="details"><summary>查看预期与实际通讯录</summary>
+    <p class="small">预期通讯录</p><pre class="stdout">{{ view.expected_contacts|tojson(indent=2) }}</pre>
+    <p class="small">实际通讯录</p><pre class="stdout">{{ view.actual_contacts|tojson(indent=2) }}</pre>
+  </details>
+</div>
+{% endmacro %}
+
+{% macro search_matches(title, records) %}
+<p><strong>{{ title }}：</strong>{% if records is none %}未取得有效联系人列表{% elif records %}{{ records|map(attribute='name')|join('、') }}（{{ records|length }} 人）{% else %}（空列表）{% endif %}</p>
+{% if records %}
+<div class="table-scroll"><table class="table">
+  <thead><tr><th>原编号</th><th>姓名</th><th>手机号</th><th>生日</th></tr></thead>
+  <tbody>{% for contact in records %}<tr><td class="mono">{{ contact.id }}</td><td>{{ contact.name }}</td><td class="mono">{{ contact.phone }}</td><td class="mono">{{ contact.birthday }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+{% endmacro %}
+
+{% macro search_observation(view) %}
+<div class="search-observation">
+  <p>检索关键字原值：{% if view.keyword_json is none %}未取得有效关键字{% else %}<code class="json">{{ view.keyword_json }}</code>{% if view.keyword_empty %}（空字符串）{% elif view.keyword_whitespace %}（仅含空白，共 {{ view.keyword_length }} 个字符）{% else %}（保留空格和大小写）{% endif %}{% endif %}</p>
+  {{ search_matches('预期匹配联系人', view.expected_matches) }}
+  {{ search_matches('实际匹配联系人', view.actual_matches) }}
+  <p><strong>通讯录状态：</strong>{% if view.contacts_comparison == 'MATCH' %}内容完整保留{% elif view.contacts_comparison == 'MISMATCH' %}与预期不一致，请检查检索是否修改了联系人{% else %}未取得可确认的结果{% endif %}</p>
   <details class="details"><summary>查看预期与实际通讯录</summary>
     <p class="small">预期通讯录</p><pre class="stdout">{{ view.expected_contacts|tojson(indent=2) }}</pre>
     <p class="small">实际通讯录</p><pre class="stdout">{{ view.actual_contacts|tojson(indent=2) }}</pre>

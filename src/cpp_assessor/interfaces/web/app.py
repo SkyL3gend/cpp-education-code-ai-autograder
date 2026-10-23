@@ -323,16 +323,41 @@ def _date_summary(case_input: dict, expected: Any, actual: Any,
             "actual_contacts": actual.get("contacts_after") if isinstance(actual, dict) else None}
 
 
+def _search_summary(case_input: dict, expected: Any, actual: Any,
+                    contacts_comparison: str | None = None) -> dict[str, Any]:
+    """Show full observed search records, preserving IDs and keyword bytes."""
+    keyword = case_input.get("keyword")
+    def matches(value):
+        result = value.get("matches") if isinstance(value, dict) else None
+        if (not isinstance(result, list) or any(not isinstance(row, dict)
+                or type(row.get("id")) is not int
+                or any(not isinstance(row.get(key), str) for key in ("name", "phone", "birthday"))
+                for row in result)):
+            return None
+        return result
+    return {"kind": "search", "keyword": keyword,
+            "keyword_json": json.dumps(keyword, ensure_ascii=False) if isinstance(keyword, str) else None,
+            "keyword_empty": keyword == "", "keyword_whitespace": isinstance(keyword, str) and keyword.isspace(),
+            "keyword_length": len(keyword) if isinstance(keyword, str) else None,
+            "expected_matches": matches(expected), "actual_matches": matches(actual),
+            "contacts_comparison": contacts_comparison,
+            "expected_contacts": expected.get("contacts_after") if isinstance(expected, dict) else None,
+            "actual_contacts": actual.get("contacts_after") if isinstance(actual, dict) else None}
+
+
 def _business_summary_for(task_id: str):
-    return {"t2_birthday_today": _birthday_summary, "t3_date_validation": _date_summary}.get(task_id)
+    return {"t2_birthday_today": (_birthday_summary, "a_names", "names"),
+            "t3_date_validation": (_date_summary, "a_created", "created"),
+            "t4_name_search": (_search_summary, "a_matches", "matches")}.get(task_id)
 
 
 def _business_case_views(settings: WebSettings, report: AssessmentReport) -> dict[str, dict[str, Any]]:
     """Use report assertions as observations, and only a matching task for inputs."""
-    summary = _business_summary_for(report.provenance.task_id)
+    presentation = _business_summary_for(report.provenance.task_id)
     profile = get_pilot_profile(report.provenance.task_id, report.provenance.task_version)
-    if summary is None or profile is None:
+    if presentation is None or profile is None:
         return {}
+    summary, result_id, field = presentation
     try:
         task = load_task(profile.task_ref, task_library=settings.library, allow_draft=True)
         if task.package_hash != report.provenance.task_package_hash:
@@ -343,13 +368,15 @@ def _business_case_views(settings: WebSettings, report: AssessmentReport) -> dic
                   "c_window_edge": "提醒窗口之外", "c_negative_window": "负数提醒窗口",
                   "c_valid_leap": "合法闰日", "c_valid_common": "合法普通日期",
                   "c_invalid_1900_02_29": "1900 年不是闰年", "c_invalid_year_low": "年份低于 1900",
-                  "c_invalid_year_high": "年份高于 2100", "c_invalid_april_31": "四月没有 31 日"}
+                  "c_invalid_year_high": "年份高于 2100", "c_invalid_april_31": "四月没有 31 日",
+                  "c_case_insensitive": "忽略 ASCII 大小写并返回全部匹配", "c_chinese": "中文姓名检索",
+                  "c_upper_keyword": "大写关键字检索", "c_empty_keyword": "空字符串关键字",
+                  "c_no_match": "没有匹配的联系人"}
         for case in report.case_results:
             if case.case_id not in task.cases:
                 continue
             assertions = {item.assertion_id: item for item in case.assertion_results}
-            result_assertion = assertions.get("a_names" if summary is _birthday_summary else "a_created")
-            field = "names" if summary is _birthday_summary else "created"
+            result_assertion = assertions.get(result_id)
             contacts = assertions.get("a_contacts")
             result[case.case_id] = summary(task.cases[case.case_id].input,
                 {field: result_assertion.expected if result_assertion else None, "contacts_after": contacts.expected if contacts else None},
@@ -862,8 +889,9 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
         calibration = _read_verifier_calibration(settings, run_id, report)
         challenges = _read_target_challenges(settings, run_id, report)
         challenge_views = {}
-        summary = _business_summary_for(report.provenance.task_id)
-        if challenges and summary is not None:
+        presentation = _business_summary_for(report.provenance.task_id)
+        if challenges and presentation is not None:
+            summary = presentation[0]
             for challenge in challenges["challenge_results"]:
                 contacts = next((item for item in challenge.get("assertion_results", [])
                                  if isinstance(item, dict) and item.get("assertion_id") == "a_contacts"), {})

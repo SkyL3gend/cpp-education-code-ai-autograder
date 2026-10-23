@@ -5,7 +5,7 @@ does not import execution backends or grant a scoring qualification.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
@@ -29,6 +29,9 @@ class PilotTaskProfile:
     required_seed_case_ids: tuple[str, ...]
     faulty_created_cases: tuple[str, ...]
     faulty_name_exclusions: Mapping[str, tuple[str, ...]]
+    mutable_file: str = "validators.cpp"
+    fixture_overrides: tuple[str, ...] = ("validators.cpp",)
+    faulty_match_ids: Mapping[str, tuple[int, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def policy_version(self) -> str:
@@ -53,6 +56,8 @@ class PilotTaskProfile:
                 return {identifier: "MISMATCH" for identifier in self.assertion_ids}
             if case_id in self.faulty_name_exclusions:
                 result["a_names"] = "MISMATCH"
+            if case_id in self.faulty_match_ids:
+                result["a_matches"] = "MISMATCH"
         return result
 
 
@@ -113,6 +118,35 @@ _PROFILES = (
         required_seed_case_ids=("challenge_2100_feb29", "challenge_common_feb29", "challenge_year_1900_valid"),
         faulty_created_cases=("c_invalid_1900_02_29", "c_invalid_year_low", "c_invalid_year_high", "challenge_2100_feb29", "challenge_common_feb29"),
         faulty_name_exclusions=MappingProxyType({}),
+    ),
+    PilotTaskProfile(
+        task_id="t4_name_search", version="1.0.0", title="T4 姓名检索",
+        calibration_policy="t4-scaffold-regression-v1",
+        challenge_policy="t4-target-challenges-v1",
+        qualification="T4_REGRESSION_CALIBRATED",
+        formal_case_ids=("c_case_insensitive", "c_chinese", "c_upper_keyword", "c_empty_keyword", "c_no_match"),
+        challenge_labels=MappingProxyType({
+            "challenge_infix": "纯中缀子串匹配",
+            "challenge_all_duplicates": "全部匹配与重复姓名记录",
+            "challenge_mixed_ascii": "混合 ASCII 大小写",
+            "challenge_chinese_multiple": "中文姓名全部匹配",
+            "challenge_empty_book": "空通讯录检索",
+            "challenge_empty_keyword": "空关键字保留原通讯录",
+            "challenge_space_literal": "空格关键字原值匹配",
+            "challenge_punctuation_literal": "标点关键字原值匹配",
+        }),
+        assertion_ids=("a_matches", "a_contacts"),
+        scope="T4 固定工程的独立正确/缺陷夹具自动回归；不等同权威签审，不授予正式评分资格",
+        challenge_scope="当前目标程序的八项额外检索规则与完整状态观测；不改写封存任务或五项正式用例计数，不授予正式评分资格",
+        coverage_limits=("补充检查覆盖非前缀子串、ASCII 大小写、全部匹配、重复姓名与原编号、中文及空格/标点原值；空关键字和空通讯录分开验证", "仅要求 ASCII 字母不区分大小写；未扩张为任意 Unicode 大小写或区域语言排序规则", "有限回归不能证明对所有程序、所有输入和所有适配形态正确"),
+        mutable_signature="std::vector<Contact> ContactBook::searchByName(const std::string& keyword) const {",
+        mutable_file="contactbook.cpp", fixture_overrides=("contactbook.cpp",),
+        declared_faulty_cases=("c_case_insensitive",),
+        required_seed_case_ids=("c_case_insensitive", "challenge_all_duplicates", "challenge_infix"),
+        faulty_created_cases=(), faulty_name_exclusions=MappingProxyType({}),
+        faulty_match_ids=MappingProxyType({"c_case_insensitive": (2,), "c_upper_keyword": (),
+            "challenge_all_duplicates": (7,), "challenge_mixed_ascii": (), "challenge_chinese_multiple": (7,),
+            "challenge_space_literal": (7,), "challenge_punctuation_literal": (7,)}),
     ),
 )
 

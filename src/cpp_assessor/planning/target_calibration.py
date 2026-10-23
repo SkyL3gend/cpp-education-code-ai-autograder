@@ -85,7 +85,7 @@ def trusted_task_variants(task) -> dict[str, dict[str, str]]:
         raise ValueError("固定任务的参照缺陷声明发生变化")
     result = {}
     for name, variant in variants.items():
-        if variant.overrides != ["validators.cpp"]:
+        if variant.overrides != list(profile.fixture_overrides):
             raise ValueError("不支持的固定夹具构建形态")
         result[name] = {filename: (task.task_dir / "variants" / name / filename if filename in variant.overrides else task.project_root / filename).read_text(encoding="utf-8") for filename in _FILES}
     return result
@@ -127,17 +127,20 @@ def _fixtures_for_target(task, bundle, files):
         filename, actual = next(iter(files.items()))
         if not re.fullmatch(r"[A-Za-z0-9_.-]+\.(cpp|cc|cxx)", filename) or bundle.target.sources != [filename]:
             raise ValueError("合并工程必须是唯一的相对 C++ 编译单元")
-        expected = merged_task_source(trusted["correct"])
-        if _scaffold(actual, profile.mutable_signature) is None or _scaffold(actual, profile.mutable_signature) != _scaffold(expected, profile.mutable_signature):
+        allowed = {_scaffold(merged_task_source(variant), profile.mutable_signature) for variant in trusted.values()}
+        scaffold = _scaffold(actual, profile.mutable_signature)
+        if scaffold is None or scaffold not in allowed:
             raise ValueError("目标不属于该题固定合并工程；不能迁移独立夹具校准")
         return "single_amalgamation", {name: {filename: merged_task_source(value)} for name, value in trusted.items()}
     if set(files) != set(_FILES) or set(bundle.target.sources) - set(_FILES) or not {"validators.cpp", "contactbook.cpp"} <= set(bundle.target.sources):
         raise ValueError("当前校准仅支持单合并文件或原始四模块工程")
     for filename in _FILES:
         actual, expected = _text(files[filename]), _text(trusted["correct"][filename])
-        if filename == "validators.cpp":
-            if _scaffold(actual, profile.mutable_signature) is None or _scaffold(actual, profile.mutable_signature) != _scaffold(expected, profile.mutable_signature):
-                raise ValueError("validators.cpp 在当前题指定函数以外的结构发生变化")
+        if filename == profile.mutable_file:
+            allowed = {_scaffold(variant[filename], profile.mutable_signature) for variant in trusted.values()}
+            scaffold = _scaffold(actual, profile.mutable_signature)
+            if scaffold is None or scaffold not in allowed:
+                raise ValueError(f"{filename} 在当前题指定函数以外的结构发生变化")
         elif actual != expected:
             raise ValueError(f"固定工程的 {filename} 发生变化，无法迁移校准")
     return "four_modules", trusted
@@ -157,6 +160,8 @@ def supplemental_cases(task):
         return _birthday_supplemental_cases(task)
     if profile.task_id == "t3_date_validation":
         return _date_supplemental_cases(task)
+    if profile.task_id == "t4_name_search":
+        return _search_supplemental_cases(task)
     seed = task.case("c_non_digit_11")
     challenges = []
     for identifier, phone in (("challenge_prefix_2", "23800138000"), ("challenge_empty", ""), ("challenge_fullwidth", "１３８００１３８０００")):
@@ -237,6 +242,35 @@ def _date_supplemental_cases(task):
     return cases
 
 
+def _search_supplemental_cases(task):
+    """Explicit substring records; whitespace/punctuation are never normalized."""
+    seed = task.case("c_case_insensitive")
+
+    def contact(identifier, name):
+        return {"id": identifier, "name": name, "phone": f"13800138{identifier:03d}",
+            "birthday": {"year": 1990 + identifier % 10, "month": 1, "day": 1 + identifier % 28}}
+
+    definitions = (
+        ("challenge_infix", "MID", [(7, "prefix-MID-suffix"), (42, "plain")], (7,)),
+        ("challenge_all_duplicates", "anna", [(7, "anna"), (42, "anna"), (99, "xxanna"), (105, "other")], (7, 42, 99)),
+        ("challenge_mixed_ascii", "AlIcE", [(7, "aLiCe"), (42, "xxALICExx"), (99, "Bob")], (7, 42)),
+        ("challenge_chinese_multiple", "王", [(7, "王小明"), (42, "小王"), (99, "王小明"), (105, "李四")], (7, 42, 99)),
+        ("challenge_empty_book", "a", [], ()),
+        ("challenge_empty_keyword", "", [(7, "Alpha"), (42, " Beta")], ()),
+        ("challenge_space_literal", " ", [(7, "Anna Liu"), (42, "Bob  Chen"), (99, "NoSpace"), (105, " ")], (7, 42, 105)),
+        ("challenge_punctuation_literal", ".", [(7, "A.B"), (42, "A*B"), (99, "X.B"), (105, "AB")], (7, 99)),
+    )
+    cases = []
+    for identifier, keyword, names, match_ids in definitions:
+        contacts = [contact(identifier, name) for identifier, name in names]
+        projected = _project_contacts(contacts)
+        lookup = {contact["id"]: contact for contact in projected}
+        expected = {"matches": [copy.deepcopy(lookup[identifier]) for identifier in match_ids], "contacts_after": projected}
+        cases.append(seed.model_copy(update={"case_id": identifier,
+            "input": {"initial_contacts": contacts, "keyword": keyword}, "expected": expected}))
+    return cases
+
+
 def _fixture_expectation(profile: PilotTaskProfile, case, variant: str):
     """Independently specified defect observations, never executable inputs."""
     actual = copy.deepcopy(case.expected)
@@ -245,7 +279,26 @@ def _fixture_expectation(profile: PilotTaskProfile, case, variant: str):
             actual = _created_observation(case.input)
         for excluded in profile.faulty_name_exclusions.get(case.case_id, ()):
             actual["names"].remove(excluded)
+        if case.case_id in profile.faulty_match_ids:
+            projected = _project_contacts(case.input["initial_contacts"])
+            lookup = {contact["id"]: contact for contact in projected}
+            if len(lookup) != len(projected):
+                raise ValueError("固定检索夹具的联系人编号必须唯一")
+            actual["matches"] = [copy.deepcopy(lookup[identifier]) for identifier in profile.faulty_match_ids[case.case_id]]
     return actual
+
+
+def reference_observation(task, case, variant="correct"):
+    """Author-specified fixture observation for host evidence/tests, not actuals.
+
+    Call only with a loaded task case or its registered ``supplemental_cases``.
+    This helper is never passed into the student executable or model; production
+    actual observations always come from the isolated runtime protocol.
+    """
+    profile = get_pilot_profile(task.task_id, str(task.version))
+    if profile is None or variant not in {"correct", "faulty"} or case.case_id not in profile.formal_case_ids + profile.supplemental_case_ids:
+        raise ValueError("未知任务、参照夹具或用例")
+    return _fixture_expectation(profile, case, variant)
 
 
 def _same_observation(actual, expected):
