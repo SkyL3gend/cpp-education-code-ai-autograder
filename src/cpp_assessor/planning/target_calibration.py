@@ -162,6 +162,8 @@ def supplemental_cases(task):
         return _date_supplemental_cases(task)
     if profile.task_id == "t4_name_search":
         return _search_supplemental_cases(task)
+    if profile.task_id == "t5_id_allocation":
+        return _id_supplemental_cases(task)
     seed = task.case("c_non_digit_11")
     challenges = []
     for identifier, phone in (("challenge_prefix_2", "23800138000"), ("challenge_empty", ""), ("challenge_fullwidth", "１３８００１３８０００")):
@@ -271,6 +273,64 @@ def _search_supplemental_cases(task):
     return cases
 
 
+def _id_sequence_observation(case_input, identifiers):
+    """Project fixed author scenarios using an explicit final ID sequence.
+
+    Registered T5 scenarios delete original records before valid additions.
+    IDs are supplied by the author, never inferred from a runtime observation.
+    General arbitrary operation streams require a new independently authored
+    scenario rather than extending this small fixture projection implicitly.
+    """
+    deleted = {operation["id"] for operation in case_input["ops"] if operation["kind"] == "delete"}
+    records = [copy.deepcopy(contact) for contact in case_input["initial_contacts"] if contact["id"] not in deleted]
+    adding = False
+    for operation in case_input["ops"]:
+        if operation["kind"] == "delete":
+            if adding:
+                raise ValueError("固定编号夹具不支持新增后的删除，请独立定义新场景")
+        else:
+            adding = True
+            records.append({key: copy.deepcopy(operation[key]) for key in ("name", "phone", "birthday")})
+    if len(records) != len(identifiers):
+        raise ValueError("固定编号夹具的完整记录与作者编号序列长度不一致")
+    for contact, identifier in zip(records, identifiers):
+        contact["id"] = identifier
+    return {"id_list": list(identifiers), "contacts_after": _project_contacts(records)}
+
+
+def _id_supplemental_cases(task):
+    """Explicit current-maximum semantics, including valid reuse after deletion."""
+    seed = task.case("c_delete_then_add")
+
+    def contact(identifier):
+        return {"id": identifier, "name": f"原联系人{identifier}", "phone": f"13800138{identifier:03d}",
+            "birthday": {"year": 1990, "month": 1, "day": 1 + identifier % 28}}
+
+    def add(index=0):
+        return {"kind": "add", "name": f"新增联系人{index}", "phone": f"13800138{90 + index:03d}",
+            "birthday": {"year": 2000, "month": 6, "day": 15 + index}}
+
+    def delete(identifier):
+        return {"kind": "delete", "id": identifier}
+
+    definitions = (
+        ("challenge_unsorted_seed", (7, 42, 3), [add()], (7, 42, 3, 43)),
+        ("challenge_delete_first", (7, 42, 9), [delete(7), add()], (42, 9, 43)),
+        ("challenge_delete_middle", (7, 42, 9), [delete(42), add()], (7, 9, 10)),
+        ("challenge_delete_last", (3, 1, 2), [delete(2), add()], (3, 1, 4)),
+        ("challenge_delete_max_reuse", (1, 2, 3), [delete(3), add(), add(1)], (1, 2, 3, 4)),
+        ("challenge_multiple_add", (9, 2), [add(), add(1)], (9, 2, 10, 11)),
+        ("challenge_delete_noop_only", (42, 7), [delete(99), delete(99)], (42, 7)),
+        ("challenge_clear_then_add", (7, 42), [delete(7), delete(42), add()], (1,)),
+    )
+    cases = []
+    for identifier, initial_ids, operations, final_ids in definitions:
+        payload = {"initial_contacts": [contact(identifier) for identifier in initial_ids], "ops": operations}
+        cases.append(seed.model_copy(update={"case_id": identifier, "input": payload,
+            "expected": _id_sequence_observation(payload, final_ids)}))
+    return cases
+
+
 def _fixture_expectation(profile: PilotTaskProfile, case, variant: str):
     """Independently specified defect observations, never executable inputs."""
     actual = copy.deepcopy(case.expected)
@@ -285,6 +345,8 @@ def _fixture_expectation(profile: PilotTaskProfile, case, variant: str):
             if len(lookup) != len(projected):
                 raise ValueError("固定检索夹具的联系人编号必须唯一")
             actual["matches"] = [copy.deepcopy(lookup[identifier]) for identifier in profile.faulty_match_ids[case.case_id]]
+        if case.case_id in profile.faulty_id_lists:
+            actual = _id_sequence_observation(case.input, profile.faulty_id_lists[case.case_id])
     return actual
 
 
@@ -301,12 +363,42 @@ def reference_observation(task, case, variant="correct"):
     return _fixture_expectation(profile, case, variant)
 
 
-def _same_observation(actual, expected):
+def _same_observation(actual, expected, *, ordered_keys=()):
     if not isinstance(actual, dict) or set(actual) != set(expected):
         return False
     return all(Counter(map(canonical_json, actual[key])) == Counter(map(canonical_json, expected[key]))
-               if isinstance(expected[key], list) and isinstance(actual[key], list)
+               if key not in ordered_keys and isinstance(expected[key], list) and isinstance(actual[key], list)
                else strict_equal(actual[key], expected[key]) for key in expected)
+
+
+def _state_evidence(profile, case, actual, *, transition_verified):
+    """Keep legacy all-seed evidence separate from legitimate deletion policy."""
+    initial = _project_contacts(case.input["initial_contacts"])
+    contacts = actual.get("contacts_after", []) if isinstance(actual, dict) else []
+    if profile.state_preservation_policy == "all_initial_contacts_v1":
+        preserved = isinstance(contacts, list) and all(any(strict_equal(contact, item) for item in contacts) for contact in initial)
+        return {"initial_contacts_preserved": preserved}, preserved
+    if profile.state_preservation_policy != "surviving_initial_contacts_v1":
+        raise ValueError("未知原联系人状态保留策略")
+    deleted = {operation["id"] for operation in case.input["ops"] if operation["kind"] == "delete"}
+    surviving = Counter(canonical_json(contact) for contact in initial if contact["id"] not in deleted)
+    preserved = isinstance(contacts, list) and surviving <= Counter(map(canonical_json, contacts))
+    return {"state_preservation_policy": profile.state_preservation_policy,
+        "surviving_initial_contacts_preserved": preserved,
+        "state_transition_verified": transition_verified}, preserved and transition_verified
+
+
+def state_evidence(task, case, actual, variant="correct"):
+    """Compare a saved observation with the registered fixture/state policy.
+
+    ``variant='faulty'`` is only for independent reference-calibration evidence.
+    The actual student executable always uses the default correct expectation.
+    This does not execute operations or generate replacement runtime actuals.
+    """
+    profile = get_pilot_profile(task.task_id, str(task.version))
+    expected = reference_observation(task, case, variant)
+    transition = _same_observation(actual, expected, ordered_keys=profile.ordered_observation_keys)
+    return _state_evidence(profile, case, actual, transition_verified=transition)[0]
 
 
 def _write(path: Path, value: Any):
@@ -351,6 +443,8 @@ def calibrate_target_verifier(*, task, bundle: TargetVerifierBundle,
         "scope": profile.scope if profile else "未登记的任务版本不能进行固定工程回归校准",
         "coverage_limits": list(profile.coverage_limits) if profile else [],
     }
+    if profile and profile.state_preservation_policy != "all_initial_contacts_v1":
+        record["state_preservation_policy"] = profile.state_preservation_policy
 
     def finish(status, reason=None):
         record["status"] = status
@@ -446,14 +540,9 @@ def calibrate_target_verifier(*, task, bundle: TargetVerifierBundle,
                     return finish("UNSUPPORTED", "固定夹具的精确缺陷签名与任务断言不一致")
                 expected_comparison = "MISMATCH" if "MISMATCH" in expected_assertions.values() else "MATCH"
                 good = results == expected_assertions
-                # Keep complete initial state, including author-assigned IDs.
-                # The bad fixture must preserve seeds too, even though it adds
-                # a candidate that the correct fixture must reject.
-                initial = _project_contacts(case.input["initial_contacts"])
-                observed_contacts = (parsed.actual or {}).get("contacts_after", [])
-                preserved = isinstance(observed_contacts, list) and all(any(strict_equal(contact, item) for item in observed_contacts) for contact in initial)
-                defect_verified = _same_observation(parsed.actual, expected_actual)
-                row = {"case_id": case.case_id, "purpose": "SUPPLEMENTAL_CALIBRATION" if case.case_id not in task.task_spec.case_ids else "REFERENCE_REGRESSION", "termination": run.termination.value, "protocol_status": parsed.status.value, "assertions": results, "expected_assertions": expected_assertions, "expected_comparison": expected_comparison, "initial_contacts_preserved": preserved, "defect_signature_verified": defect_verified, "actual": parsed.actual, "passed": good and preserved and defect_verified, "wall_ms": run.wall_ms, "request_hash": hash_json(request), "stdout_hash": hashlib.sha256(stdout.encode()).hexdigest()}
+                defect_verified = _same_observation(parsed.actual, expected_actual, ordered_keys=profile.ordered_observation_keys)
+                state_fields, state_verified = _state_evidence(profile, case, parsed.actual, transition_verified=defect_verified)
+                row = {"case_id": case.case_id, "purpose": "SUPPLEMENTAL_CALIBRATION" if case.case_id not in task.task_spec.case_ids else "REFERENCE_REGRESSION", "termination": run.termination.value, "protocol_status": parsed.status.value, "assertions": results, "expected_assertions": expected_assertions, "expected_comparison": expected_comparison, **state_fields, "defect_signature_verified": defect_verified, "actual": parsed.actual, "passed": good and state_verified and defect_verified, "wall_ms": run.wall_ms, "request_hash": hash_json(request), "stdout_hash": hashlib.sha256(stdout.encode()).hexdigest()}
                 variant["cases"].append(row)
                 _write(case_dir / "observation.json", row)
             variant["passed"] = all(row["passed"] for row in variant["cases"]) and len(variant["cases"]) == len(cases)
@@ -485,6 +574,8 @@ def calibration_binding_matches(record: dict[str, Any], *, task, bundle: TargetV
                 "environment_digest": capabilities.environment_digest,
                 "backend_capabilities_hash": hash_json(capabilities.model_dump(mode="json")),
                 "backend_id": backend.backend_id}
+    if profile.state_preservation_policy != "all_initial_contacts_v1":
+        bindings["state_preservation_policy"] = profile.state_preservation_policy
     return bool(record.get("passed") and record.get("status") == "COMPLETED" and
                 record.get("qualification") == profile.qualification and
                 record.get("record_hash") == hash_json({key: value for key, value in record.items() if key != "record_hash"}) and
@@ -523,6 +614,8 @@ def run_target_challenges(*, task, bundle: TargetVerifierBundle, backend,
         "scope": profile.challenge_scope if profile else "该任务版本未登记补充规则检查",
         "challenge_results": [],
     }
+    if profile and profile.state_preservation_policy != "all_initial_contacts_v1":
+        record["state_preservation_policy"] = profile.state_preservation_policy
 
     def finish(status, reason=None):
         record["status"] = status
@@ -605,6 +698,9 @@ def run_target_challenges(*, task, bundle: TargetVerifierBundle, backend,
                 "protocol_status": parsed.status.value, "detail": "; ".join(errors) if errors else parsed.detail,
                 "wall_ms": outcome.wall_ms, "request_hash": hash_json(request),
                 "stdout_hash": hashlib.sha256(stdout.encode()).hexdigest()}
+            if profile.state_preservation_policy != "all_initial_contacts_v1":
+                transition = _same_observation(parsed.actual, case.expected, ordered_keys=profile.ordered_observation_keys)
+                row.update(_state_evidence(profile, case, parsed.actual, transition_verified=transition)[0])
             record["challenge_results"].append(row)
             _write(case_dir / "observation.json", row)
         if hashlib.sha256(executable.read_bytes()).hexdigest() != record["executable_hash"] or backend.capabilities().environment_digest != record["environment_digest"]:

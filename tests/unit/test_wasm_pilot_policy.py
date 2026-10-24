@@ -42,14 +42,15 @@ def test_pilot_upload_is_explicit_and_task_scoped(tmp_path):
         response = client.post("/llm/runs", data={"task_ref": "t1_phone_validation@1.0.0"})
         assert response.status_code == 403
     with TestClient(create_app(WebSettings(backend="wasm_pilot", allow_unattested=True, data_root=tmp_path / "pilot")), base_url="http://127.0.0.1") as client:
-        response = client.post("/llm/runs", data={"task_ref": "t5_id_allocation@1.0.0"})
+        response = client.post("/llm/runs", data={"task_ref": "t6_unknown@1.0.0"})
         assert response.status_code == 400
         page = client.get("/").text
         assert "/llm/tasks/t1_phone_validation@1.0.0" in page
         assert "/llm/tasks/t2_birthday_today@1.0.0" in page
         assert "/llm/tasks/t3_date_validation@1.0.0" in page
         assert "/llm/tasks/t4_name_search@1.0.0" in page
-        for task_id in ("t2_birthday_today", "t3_date_validation", "t4_name_search"):
+        assert "/llm/tasks/t5_id_allocation@1.0.0" in page
+        for task_id in ("t2_birthday_today", "t3_date_validation", "t4_name_search", "t5_id_allocation"):
             task_page = client.get(f"/llm/tasks/{task_id}@1.0.0").text
             assert 'action="/llm/runs"' in task_page
             assert "上传测评暂不可用" not in task_page
@@ -57,7 +58,7 @@ def test_pilot_upload_is_explicit_and_task_scoped(tmp_path):
 
 def test_pilot_profiles_are_explicit_task_versions():
     from cpp_assessor.planning.pilot_tasks import get_pilot_profile, PILOT_TASK_REFS
-    assert PILOT_TASK_REFS == {"t1_phone_validation@1.0.0", "t2_birthday_today@1.0.0", "t3_date_validation@1.0.0", "t4_name_search@1.0.0"}
+    assert PILOT_TASK_REFS == {"t1_phone_validation@1.0.0", "t2_birthday_today@1.0.0", "t3_date_validation@1.0.0", "t4_name_search@1.0.0", "t5_id_allocation@1.0.0"}
     assert len(get_pilot_profile("t2_birthday_today").formal_case_ids) == 6
     assert get_pilot_profile("t2_birthday_today", "2.0.0") is None
     assert len(get_pilot_profile("t3_date_validation").formal_case_ids) == 6
@@ -66,7 +67,9 @@ def test_pilot_profiles_are_explicit_task_versions():
     assert len(get_pilot_profile("t4_name_search").formal_case_ids) == 5
     assert len(get_pilot_profile("t4_name_search").supplemental_case_ids) == 8
     assert get_pilot_profile("t4_name_search", "1.0.1") is None
-    assert get_pilot_profile("t5_id_allocation") is None
+    assert len(get_pilot_profile("t5_id_allocation").formal_case_ids) == 5
+    assert get_pilot_profile("t5_id_allocation", "1.0.1") is None
+    assert get_pilot_profile("t6_unknown") is None
 
 
 def test_pilot_rejects_cross_origin_uploads_and_foreign_hosts(tmp_path):

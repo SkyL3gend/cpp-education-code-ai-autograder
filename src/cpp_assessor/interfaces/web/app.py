@@ -194,6 +194,10 @@ def _read_target_challenges(settings: WebSettings, run_id: str,
                        for key in ("required", "attempted", "matched", "mismatched", "not_compared"))
                 or type(candidate.get("passed")) is not bool or type(candidate.get("defect_detected")) is not bool):
             return None
+        if profile.state_preservation_policy == "surviving_initial_contacts_v1":
+            if (candidate.get("state_preservation_policy") != profile.state_preservation_policy
+                    or any(not _allocation_challenge_state_consistent(row, profile) for row in rows)):
+                return None
         # A self-consistent record hash does not guarantee that its summary
         # agrees with its individual observations.  Never advertise a defect
         # (or a full set of successful checks) from a malformed or partial summary.
@@ -245,6 +249,9 @@ def _read_verifier_calibration(settings: WebSettings, run_id: str,
                 and replay["file_hashes"].get("plans/target_calibration.json") == hashlib.sha256(raw).hexdigest()
                 and replay["file_hashes"].get("plans/frozen_plan.json") == hashlib.sha256(frozen_raw).hexdigest()):
             return None
+        if (profile.state_preservation_policy == "surviving_initial_contacts_v1"
+                and candidate.get("state_preservation_policy") != profile.state_preservation_policy):
+            return None
         if candidate["passed"] and not (candidate.get("status") == "COMPLETED"
                 and candidate.get("qualification") == profile.qualification
                 and candidate.get("formal_case_ids") == list(profile.formal_case_ids)
@@ -282,9 +289,36 @@ def _calibration_summary_consistent(record: dict[str, Any], profile) -> bool:
             if (row.get("passed") is not True or row.get("termination") != "EXITED"
                     or row.get("protocol_status") != "OK" or row.get("assertions") != expected
                     or row.get("expected_assertions", expected) != expected
-                    or row.get("initial_contacts_preserved") is not True
                     or row.get("defect_signature_verified") is not True):
                 return False
+            if profile.state_preservation_policy == "all_initial_contacts_v1":
+                if row.get("initial_contacts_preserved") is not True:
+                    return False
+            elif profile.state_preservation_policy == "surviving_initial_contacts_v1":
+                if (not _allocation_state_evidence_valid(row, profile)
+                        or row["surviving_initial_contacts_preserved"] is not True
+                        or row["state_transition_verified"] is not True):
+                    return False
+            else:
+                return False
+    return True
+
+
+def _allocation_state_evidence_valid(row: dict[str, Any], profile) -> bool:
+    """A mutating task cannot inherit legacy evidence that all seeds survived."""
+    return (row.get("state_preservation_policy") == profile.state_preservation_policy
+            and type(row.get("surviving_initial_contacts_preserved")) is bool
+            and type(row.get("state_transition_verified")) is bool)
+
+
+def _allocation_challenge_state_consistent(row: dict[str, Any], profile) -> bool:
+    if not _allocation_state_evidence_valid(row, profile):
+        return False
+    assertions = row.get("assertion_results", [])
+    all_assertions_matched = bool(assertions) and all(item.get("comparison") == "MATCH" for item in assertions)
+    if row.get("comparison") == "MATCH" or all_assertions_matched:
+        return (row["surviving_initial_contacts_preserved"] is True
+                and row["state_transition_verified"] is True)
     return True
 
 
@@ -348,7 +382,52 @@ def _search_summary(case_input: dict, expected: Any, actual: Any,
 def _business_summary_for(task_id: str):
     return {"t2_birthday_today": (_birthday_summary, "a_names", "names"),
             "t3_date_validation": (_date_summary, "a_created", "created"),
-            "t4_name_search": (_search_summary, "a_matches", "matches")}.get(task_id)
+            "t4_name_search": (_search_summary, "a_matches", "matches"),
+            "t5_id_allocation": (_allocation_summary, "a_id_list", "id_list")}.get(task_id)
+
+
+def _allocation_summary(case_input: dict, expected: Any, actual: Any,
+                        contacts_comparison: str | None = None) -> dict[str, Any]:
+    """Display ordered observations; never replay operations or repair IDs."""
+    def ids(value):
+        result = value.get("id_list") if isinstance(value, dict) else None
+        return result if isinstance(result, list) and all(type(item) is int for item in result) else None
+
+    def contact_rows(value, *, input_dates=False):
+        if not isinstance(value, list):
+            return None
+        result = []
+        for contact in value:
+            if (not isinstance(contact, dict) or type(contact.get("id")) is not int
+                    or any(not isinstance(contact.get(key), str) for key in ("name", "phone"))):
+                return None
+            birthday = contact.get("birthday")
+            if input_dates and isinstance(birthday, dict) and all(type(birthday.get(key)) is int for key in ("year", "month", "day")):
+                birthday = f"{birthday['year']:04d}-{birthday['month']:02d}-{birthday['day']:02d}"
+            if not isinstance(birthday, str):
+                return None
+            result.append({**contact, "birthday": birthday})
+        return result
+
+    def duplicates(value):
+        result, seen = [], set()
+        for identifier in value or []:
+            if identifier in seen and identifier not in result:
+                result.append(identifier)
+            seen.add(identifier)
+        return result
+
+    expected_ids, actual_ids = ids(expected), ids(actual)
+    expected_contacts = contact_rows(expected.get("contacts_after")) if isinstance(expected, dict) else None
+    actual_contacts = contact_rows(actual.get("contacts_after")) if isinstance(actual, dict) else None
+    operations = case_input.get("ops")
+    return {"kind": "allocation", "initial_contacts": contact_rows(case_input.get("initial_contacts"), input_dates=True),
+            "operations": operations if isinstance(operations, list) else None,
+            "expected_ids": expected_ids, "actual_ids": actual_ids,
+            "duplicate_list_ids": duplicates(actual_ids),
+            "duplicate_contact_ids": duplicates([contact["id"] for contact in actual_contacts]) if actual_contacts is not None else [],
+            "contacts_comparison": contacts_comparison,
+            "expected_contacts": expected_contacts, "actual_contacts": actual_contacts}
 
 
 def _business_case_views(settings: WebSettings, report: AssessmentReport) -> dict[str, dict[str, Any]]:
@@ -371,7 +450,10 @@ def _business_case_views(settings: WebSettings, report: AssessmentReport) -> dic
                   "c_invalid_year_high": "年份高于 2100", "c_invalid_april_31": "四月没有 31 日",
                   "c_case_insensitive": "忽略 ASCII 大小写并返回全部匹配", "c_chinese": "中文姓名检索",
                   "c_upper_keyword": "大写关键字检索", "c_empty_keyword": "空字符串关键字",
-                  "c_no_match": "没有匹配的联系人"}
+                  "c_no_match": "没有匹配的联系人", "c_delete_then_add": "删除中间编号后新增",
+                  "c_empty_book": "空通讯录首次新增" if profile.task_id == "t5_id_allocation" else "空通讯录检索",
+                  "c_max_seed": "按现有最大编号新增", "c_delete_nonexistent": "删除不存在编号后新增",
+                  "c_multi_add": "删除后连续新增"}
         for case in report.case_results:
             if case.case_id not in task.cases:
                 continue

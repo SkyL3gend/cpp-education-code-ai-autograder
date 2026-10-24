@@ -47,7 +47,7 @@
 {% endmacro %}
 
 {% macro business_observation(view) %}
-{% if view.kind == 'birthday' %}{{ birthday_observation(view) }}{% elif view.kind == 'date' %}{{ date_observation(view) }}{% elif view.kind == 'search' %}{{ search_observation(view) }}{% endif %}
+{% if view.kind == 'birthday' %}{{ birthday_observation(view) }}{% elif view.kind == 'date' %}{{ date_observation(view) }}{% elif view.kind == 'search' %}{{ search_observation(view) }}{% elif view.kind == 'allocation' %}{{ allocation_observation(view) }}{% endif %}
 {% endmacro %}
 
 {% macro birthday_observation(view) %}
@@ -63,15 +63,17 @@
 </div>
 {% endmacro %}
 
-{% macro search_matches(title, records) %}
+{% macro contact_records(title, records, id_label='编号') %}
 <p><strong>{{ title }}：</strong>{% if records is none %}未取得有效联系人列表{% elif records %}{{ records|map(attribute='name')|join('、') }}（{{ records|length }} 人）{% else %}（空列表）{% endif %}</p>
 {% if records %}
 <div class="table-scroll"><table class="table">
-  <thead><tr><th>原编号</th><th>姓名</th><th>手机号</th><th>生日</th></tr></thead>
+  <thead><tr><th>{{ id_label }}</th><th>姓名</th><th>手机号</th><th>生日</th></tr></thead>
   <tbody>{% for contact in records %}<tr><td class="mono">{{ contact.id }}</td><td>{{ contact.name }}</td><td class="mono">{{ contact.phone }}</td><td class="mono">{{ contact.birthday }}</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endif %}
 {% endmacro %}
+
+{% macro search_matches(title, records) %}{{ contact_records(title, records, '原编号') }}{% endmacro %}
 
 {% macro search_observation(view) %}
 <div class="search-observation">
@@ -83,5 +85,24 @@
     <p class="small">预期通讯录</p><pre class="stdout">{{ view.expected_contacts|tojson(indent=2) }}</pre>
     <p class="small">实际通讯录</p><pre class="stdout">{{ view.actual_contacts|tojson(indent=2) }}</pre>
   </details>
+</div>
+{% endmacro %}
+
+{% macro allocation_observation(view) %}
+<div class="allocation-observation">
+  {{ contact_records('初始通讯录', view.initial_contacts, '原编号') }}
+  <p><strong>输入操作序列：</strong>按以下顺序请求新增或删除。未单独记录每步返回值或中间状态；删除不存在的编号应保持当时通讯录。</p>
+  {% if view.operations is none %}<p>未取得有效操作序列。</p>{% elif not view.operations %}<p>（无操作）</p>{% else %}
+  <ol class="operations">{% for operation in view.operations %}
+    <li>{% if operation is mapping and operation.get('kind') == 'delete' %}删除编号 <strong class="mono">{{ operation.get('id') }}</strong>
+      {% elif operation is mapping and operation.get('kind') == 'add' %}新增联系人 <strong>{{ operation.get('name') }}</strong> · 手机号 <span class="mono">{{ operation.get('phone') }}</span> · 生日 {% set birthday = operation.get('birthday') %}{% if birthday is mapping %}{{ birthday.get('year') }} 年 {{ birthday.get('month') }} 月 {{ birthday.get('day') }} 日{% else %}未取得有效日期{% endif %}
+      {% else %}无法解释的操作：<code class="json">{{ operation|tojson }}</code>{% endif %}</li>
+  {% endfor %}</ol>{% endif %}
+  <p><strong>预期编号列表（存储顺序）：</strong>{% if view.expected_ids is none %}未取得有效编号列表{% else %}<code class="json">{{ view.expected_ids|tojson }}</code>{% endif %}</p>
+  <p><strong>实际编号列表（存储顺序）：</strong>{% if view.actual_ids is none %}未取得有效编号列表{% else %}<code class="json">{{ view.actual_ids|tojson }}</code>{% endif %}</p>
+  {% if view.duplicate_list_ids or view.duplicate_contact_ids %}<p class="banner warn"><strong>重复编号提示：</strong>{% if view.duplicate_list_ids %}实际编号列表含重复编号 {{ view.duplicate_list_ids|join('、') }}。{% endif %}{% if view.duplicate_contact_ids %}实际通讯录含重复编号 {{ view.duplicate_contact_ids|join('、') }}。{% endif %}这是观测提示，正式差异以断言结果为准。</p>{% endif %}
+  <p><strong>最终通讯录：</strong>{% if view.contacts_comparison == 'MATCH' %}操作后完整记录符合预期{% elif view.contacts_comparison == 'MISMATCH' %}与预期不一致，请核查新增、删除和保留记录的编号与内容{% else %}未取得可确认的结果{% endif %}。编号列表按原序展示，保留重复项，不排序或重编号。</p>
+  {{ contact_records('预期最终通讯录', view.expected_contacts) }}
+  {{ contact_records('实际最终通讯录', view.actual_contacts) }}
 </div>
 {% endmacro %}

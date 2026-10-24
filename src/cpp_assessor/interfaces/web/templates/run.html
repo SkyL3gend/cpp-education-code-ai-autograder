@@ -60,7 +60,7 @@
   <h2>判断程序可靠性检查</h2>
   {% if verifier_calibration.passed %}
   <p><strong>固定工程回归校准通过</strong>：同一套判断程序在独立的正确版和已知缺陷版上均得到预期结果，并通过{{ task_profile.challenge_labels.values()|join('、') }}的补充挑战。</p>
-  <p class="muted small">已核对原有联系人及编号保持完整。本检查只适用于本题固定工程形态，不等同人工签审或正式评分资格。</p>
+  <p class="muted small">{% if task_profile.state_preservation_policy == 'surviving_initial_contacts_v1' %}已核对新增、删除后的完整状态，以及仍应保留的原有联系人与编号；编号列表按存储顺序比较。{% else %}已核对原有联系人及编号保持完整。{% endif %}本检查只适用于本题固定工程形态，不等同人工签审或正式评分资格。</p>
   {% else %}
   <p><strong>回归校准尚未通过或不适用</strong>：{{ verifier_calibration.get('reason', verifier_calibration.status) }}</p>
   <p class="muted small">这属于判断程序可靠性限制，不能据此认定学生程序错误。</p>

@@ -32,6 +32,9 @@ class PilotTaskProfile:
     mutable_file: str = "validators.cpp"
     fixture_overrides: tuple[str, ...] = ("validators.cpp",)
     faulty_match_ids: Mapping[str, tuple[int, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    state_preservation_policy: str = "all_initial_contacts_v1"
+    ordered_observation_keys: tuple[str, ...] = ()
+    faulty_id_lists: Mapping[str, tuple[int, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def policy_version(self) -> str:
@@ -58,6 +61,8 @@ class PilotTaskProfile:
                 result["a_names"] = "MISMATCH"
             if case_id in self.faulty_match_ids:
                 result["a_matches"] = "MISMATCH"
+            if case_id in self.faulty_id_lists:
+                return {identifier: "MISMATCH" for identifier in self.assertion_ids}
         return result
 
 
@@ -147,6 +152,39 @@ _PROFILES = (
         faulty_match_ids=MappingProxyType({"c_case_insensitive": (2,), "c_upper_keyword": (),
             "challenge_all_duplicates": (7,), "challenge_mixed_ascii": (), "challenge_chinese_multiple": (7,),
             "challenge_space_literal": (7,), "challenge_punctuation_literal": (7,)}),
+    ),
+    PilotTaskProfile(
+        task_id="t5_id_allocation", version="1.0.0", title="T5 编号分配",
+        calibration_policy="t5-scaffold-regression-v1",
+        challenge_policy="t5-target-challenges-v1",
+        qualification="T5_REGRESSION_CALIBRATED",
+        formal_case_ids=("c_delete_then_add", "c_empty_book", "c_max_seed", "c_delete_nonexistent", "c_multi_add"),
+        challenge_labels=MappingProxyType({
+            "challenge_unsorted_seed": "乱序原编号取当前最大值",
+            "challenge_delete_first": "删除首项后新增",
+            "challenge_delete_middle": "删除中项后新增",
+            "challenge_delete_last": "删除尾项后新增",
+            "challenge_delete_max_reuse": "删除最高编号后连续新增",
+            "challenge_multiple_add": "乱序通讯录连续新增",
+            "challenge_delete_noop_only": "乱序通讯录仅删除不存在编号",
+            "challenge_clear_then_add": "删除到空后重新新增",
+        }),
+        assertion_ids=("a_id_list", "a_contacts"),
+        scope="T5 固定工程的独立正确/缺陷夹具自动回归；不等同权威签审，不授予正式评分资格",
+        challenge_scope="当前目标程序的八项额外编号状态转换观测；保留编号列表的存储顺序，不改写封存任务或五项正式用例计数，不授予正式评分资格",
+        coverage_limits=("补充检查覆盖乱序原编号、首中尾删除、连续新增、仅删除不存在编号及清空后新增；核验幸存原联系人全部字段和编号列表原序", "按作者正确实现取当前最大编号分配；删除最高编号后允许使用已空闲编号，清空后从 1 开始，不要求永久历史计数器", "仅验证已列小范围正整数编号；INT_MAX 溢出等边界未测试，有限回归不证明所有程序或输入正确"),
+        mutable_signature="bool ContactBook::addContact(const std::string& name, const std::string& phone,\n                             int birthYear, int birthMonth, int birthDay) {",
+        mutable_file="contactbook.cpp", fixture_overrides=("contactbook.cpp",),
+        declared_faulty_cases=("c_delete_then_add",),
+        required_seed_case_ids=("c_delete_then_add", "challenge_unsorted_seed", "challenge_delete_noop_only", "challenge_clear_then_add"),
+        faulty_created_cases=(), faulty_name_exclusions=MappingProxyType({}),
+        state_preservation_policy="surviving_initial_contacts_v1", ordered_observation_keys=("id_list",),
+        faulty_id_lists=MappingProxyType({
+            "c_delete_then_add": (1, 3, 3), "c_max_seed": (5, 9, 3), "c_multi_add": (2, 2, 3),
+            "challenge_unsorted_seed": (7, 42, 3, 4), "challenge_delete_first": (42, 9, 3),
+            "challenge_delete_middle": (7, 9, 3), "challenge_delete_last": (3, 1, 3),
+            "challenge_multiple_add": (9, 2, 3, 4),
+        }),
     ),
 )
 
